@@ -251,8 +251,13 @@ def make_round_off_gle(gl_map, debit_credit_diff, precision):
 		return
 
 	if not round_off_gle:
-		for k in ["voucher_type", "voucher_no", "company",
-			"posting_date", "remarks", "is_opening"]:
+		dimensions = get_accounting_dimensions()
+		key_list = ["voucher_type", "voucher_no", "company",
+			"posting_date", "remarks", "is_opening"]
+
+		for dimension in dimensions:
+			key_list.append(dimension)
+		for k in key_list:
 				round_off_gle[k] = gl_map[0][k]
 
 	round_off_gle.update({
