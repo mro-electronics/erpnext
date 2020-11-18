@@ -9,10 +9,13 @@ from frappe.utils import flt, time_diff_in_hours, get_datetime, time_diff, get_l
 from frappe.model.mapper import get_mapped_doc
 from frappe.model.document import Document
 
+class OperationMismatchError(frappe.ValidationError): pass
+
 class JobCard(Document):
 	def validate(self):
 		self.validate_time_logs()
 		self.set_status()
+		self.validate_operation_id()
 
 	def validate_time_logs(self):
 		self.total_completed_qty = 0.0
@@ -107,30 +110,29 @@ class JobCard(Document):
 		for_quantity, time_in_mins = 0, 0
 		from_time_list, to_time_list = [], []
 
-
+		field = "operation_id"
 		data = frappe.get_all('Job Card',
 			fields = ["sum(total_time_in_mins) as time_in_mins", "sum(total_completed_qty) as completed_qty"],
-			filters = {"docstatus": 1, "work_order": self.work_order,
-				"workstation": self.workstation, "operation": self.operation})
+			filters = {"docstatus": 1, "work_order": self.work_order, field: self.get(field)})
 
 		if data and len(data) > 0:
 			for_quantity = data[0].completed_qty
 			time_in_mins = data[0].time_in_mins
 
-		if for_quantity:
+		if self.get(field):
 			time_data = frappe.db.sql("""
 				SELECT
 					min(from_time) as start_time, max(to_time) as end_time
 				FROM `tabJob Card` jc, `tabJob Card Time Log` jctl
 				WHERE
 					jctl.parent = jc.name and jc.work_order = %s
-					and jc.workstation = %s and jc.operation = %s and jc.docstatus = 1
-			""", (self.work_order, self.workstation, self.operation), as_dict=1)
+					and jc.{0} = %s and jc.docstatus = 1
+			""".format(field), (self.work_order, self.get(field)), as_dict=1)
 
 			wo = frappe.get_doc('Work Order', self.work_order)
 
 			for data in wo.operations:
-				if data.workstation == self.workstation and data.operation == self.operation:
+				if data.get("name") == self.get(field):
 					data.completed_qty = for_quantity
 					data.actual_operation_time = time_in_mins
 					data.actual_start_time = time_data[0].start_time if time_data else None
@@ -202,6 +204,37 @@ class JobCard(Document):
 
 		if update_status:
 			self.db_set('status', self.status)
+
+	def validate_operation_id(self):
+		if (self.get("operation_id") and self.get("operation_row_number") and self.operation and self.work_order and
+			frappe.get_cached_value("Work Order Operation", self.operation_row_number, "name") != self.operation_id):
+			work_order = frappe.bold(get_link_to_form("Work Order", self.work_order))
+			frappe.throw(_("Operation {0} does not belong to the work order {1}")
+				.format(frappe.bold(self.operation), work_order), OperationMismatchError)
+
+@frappe.whitelist()
+def get_operation_details(work_order, operation):
+	if work_order and operation:
+		return frappe.get_all("Work Order Operation", fields = ["name", "idx"],
+			filters = {
+				"parent": work_order,
+				"operation": operation
+			}
+		)
+
+@frappe.whitelist()
+def get_operations(doctype, txt, searchfield, start, page_len, filters):
+	if filters.get("work_order"):
+		args = {"parent": filters.get("work_order")}
+		if txt:
+			args["operation"] = ("like", "%{0}%".format(txt))
+
+		return frappe.get_all("Work Order Operation",
+			filters = args,
+			fields = ["distinct operation as operation"],
+			limit_start = start,
+			limit_page_length = page_len,
+			order_by="idx asc", as_list=1)
 
 @frappe.whitelist()
 def make_material_request(source_name, target_doc=None):

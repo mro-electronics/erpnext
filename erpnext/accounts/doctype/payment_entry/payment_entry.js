@@ -12,9 +12,10 @@ frappe.ui.form.on('Payment Entry', {
 
 	setup: function(frm) {
 		frm.set_query("paid_from", function() {
+			frm.events.validate_company(frm);
+
 			var account_types = in_list(["Pay", "Internal Transfer"], frm.doc.payment_type) ?
 				["Bank", "Cash"] : [frappe.boot.party_account_types[frm.doc.party_type]];
-
 			return {
 				filters: {
 					"account_type": ["in", account_types],
@@ -23,27 +24,34 @@ frappe.ui.form.on('Payment Entry', {
 				}
 			}
 		});
+
 		frm.set_query("party_type", function() {
+			frm.events.validate_company(frm);
 			return{
-				"filters": {
+				filters: {
 					"name": ["in", Object.keys(frappe.boot.party_account_types)],
 				}
 			}
 		});
+
 		frm.set_query("party_bank_account", function() {
 			return {
 				filters: {
-					"is_company_account":0
+					is_company_account: 0,
+					party_type: frm.doc.party_type,
+					party: frm.doc.party
 				}
 			}
 		});
+
 		frm.set_query("bank_account", function() {
 			return {
 				filters: {
-					"is_company_account":1
+					is_company_account: 1
 				}
 			}
 		});
+
 		frm.set_query("contact_person", function() {
 			if (frm.doc.party) {
 				return {
@@ -55,10 +63,12 @@ frappe.ui.form.on('Payment Entry', {
 				};
 			}
 		});
+
 		frm.set_query("paid_to", function() {
+			frm.events.validate_company(frm);
+
 			var account_types = in_list(["Receive", "Internal Transfer"], frm.doc.payment_type) ?
 				["Bank", "Cash"] : [frappe.boot.party_account_types[frm.doc.party_type]];
-
 			return {
 				filters: {
 					"account_type": ["in", account_types],
@@ -104,6 +114,21 @@ frappe.ui.form.on('Payment Entry', {
 			};
 		});
 
+		frm.set_query('payment_term', 'references', function(frm, cdt, cdn) {
+			const child = locals[cdt][cdn];
+			if (in_list(['Purchase Invoice', 'Sales Invoice'], child.reference_doctype) && child.reference_name) {
+				let payment_term_list = frappe.get_list('Payment Schedule', {'parent': child.reference_name});
+
+				payment_term_list = payment_term_list.map(pt => pt.payment_term);
+
+				return {
+					filters: {
+						'name': ['in', payment_term_list]
+					}
+				}
+			}
+		});
+
 		frm.set_query("reference_name", "references", function(doc, cdt, cdn) {
 			const child = locals[cdt][cdn];
 			const filters = {"docstatus": 1, "company": doc.company};
@@ -130,6 +155,12 @@ frappe.ui.form.on('Payment Entry', {
 		frm.events.hide_unhide_fields(frm);
 		frm.events.set_dynamic_labels(frm);
 		frm.events.show_general_ledger(frm);
+	},
+
+	validate_company: (frm) => {
+		if (!frm.doc.company){
+			frappe.throw({message:__("Please select a Company first."), title: __("Mandatory")});
+		}
 	},
 
 	company: function(frm) {
@@ -272,7 +303,7 @@ frappe.ui.form.on('Payment Entry', {
 			frm.set_value("contact_email", "");
 			frm.set_value("contact_person", "");
 		}
-		if(frm.doc.payment_type && frm.doc.party_type && frm.doc.party) {
+		if(frm.doc.payment_type && frm.doc.party_type && frm.doc.party && frm.doc.company) {
 			if(!frm.doc.posting_date) {
 				frappe.msgprint(__("Please select Posting Date before selecting Party"))
 				frm.set_value("party", "");
@@ -311,7 +342,7 @@ frappe.ui.form.on('Payment Entry', {
 							() => {
 								frm.set_party_account_based_on_party = false;
 								if (r.message.bank_account) {
-									frm.set_value("party_bank_account", r.message.bank_account);
+									frm.set_value("bank_account", r.message.bank_account);
 								}
 							}
 						]);
