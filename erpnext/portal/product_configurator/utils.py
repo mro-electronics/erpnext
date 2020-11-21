@@ -1,4 +1,6 @@
 import frappe
+import numpy as np
+from frappe.utils import cint
 from erpnext.portal.product_configurator.item_variants_cache import ItemVariantsCacheManager
 
 def get_field_filter_data():
@@ -12,13 +14,15 @@ def get_field_filter_data():
 	for f in fields:
 		doctype = f.get_link_doctype()
 
-		# apply enable/disable filter
+		# apply enable/disable/show_in_website filter
 		meta = frappe.get_meta(doctype)
 		filters = {}
 		if meta.has_field('enabled'):
 			filters['enabled'] = 1
 		if meta.has_field('disabled'):
 			filters['disabled'] = 0
+		if meta.has_field('show_in_website'):
+			filters['show_in_website'] = 1
 
 		values = [d.name for d in frappe.get_all(doctype, filters)]
 		filter_data.append([f, values])
@@ -172,6 +176,7 @@ def get_attributes_and_values(item_code):
 
 	item_attribute_values = frappe.db.get_all('Item Attribute Value',
 		['parent', 'attribute_value', 'idx'], order_by='parent asc, idx asc')
+	item_attribute_values += get_numeric_values()
 	ordered_attribute_value_map = frappe._dict()
 	for iv in item_attribute_values:
 		ordered_attribute_value_map.setdefault(iv.parent, []).append(iv.attribute_value)
@@ -183,6 +188,25 @@ def get_attributes_and_values(item_code):
 		attr['values'] = [v for v in ordered_values if v in valid_attribute_values]
 
 	return attributes
+
+def get_numeric_values():
+	attribute_values_list = []
+	numeric_attributes = frappe.db.get_all("Item Attribute",
+		fields=['name', 'from_range', 'to_range', 'increment'],
+		filters={"numeric_values": 1})
+	for attribute in numeric_attributes:
+		from_range = attribute["from_range"]
+		to_range = attribute['to_range'] + attribute['increment']
+		increment = attribute['increment']
+		values = list(np.arange(from_range, to_range, increment))
+
+		for idx, val in enumerate(values):
+			attribute_values_list.append(frappe._dict({
+					"parent": attribute.get("name"),
+					"attribute_value": str(int(val)) if val.is_integer() else str(val),
+					"idx": idx
+				}))
+	return attribute_values_list
 
 
 @frappe.whitelist(allow_guest=True)
@@ -239,6 +263,10 @@ def get_next_attribute_and_values(item_code, selected_attributes):
 	if exact_match:
 		data = get_product_info_for_website(exact_match[0])
 		product_info = data.product_info
+
+		if product_info:
+			product_info["allow_items_not_in_stock"] = cint(data.cart_settings.allow_items_not_in_stock)
+
 		if not data.cart_settings.show_price:
 			product_info = None
 	else:
@@ -352,7 +380,7 @@ def get_items(filters=None, search=None):
 
 	results = frappe.db.sql('''
 		SELECT
-			`tabItem`.`name`, `tabItem`.`item_name`,
+			`tabItem`.`name`, `tabItem`.`item_name`, `tabItem`.`item_code`,
 			`tabItem`.`website_image`, `tabItem`.`image`,
 			`tabItem`.`web_long_description`, `tabItem`.`description`,
 			`tabItem`.`route`

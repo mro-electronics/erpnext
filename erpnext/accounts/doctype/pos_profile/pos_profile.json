@@ -1,8 +1,10 @@
 {
+ "actions": [],
  "allow_rename": 1,
  "autoname": "Prompt",
  "creation": "2013-05-24 12:15:51",
  "doctype": "DocType",
+ "engine": "InnoDB",
  "field_order": [
   "disabled",
   "section_break_2",
@@ -21,6 +23,7 @@
   "allow_user_to_edit_discount",
   "allow_print_before_pay",
   "display_items_in_stock",
+  "hide_unavailable_items",
   "section_break_15",
   "applicable_for_users",
   "section_break_11",
@@ -50,6 +53,7 @@
   "income_account",
   "expense_account",
   "taxes_and_charges",
+  "tax_category",
   "apply_discount_on",
   "accounting_dimensions_section",
   "cost_center",
@@ -381,11 +385,24 @@
   {
    "fieldname": "dimension_col_break",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "tax_category",
+   "fieldtype": "Link",
+   "label": "Tax Category",
+   "options": "Tax Category"
+  },
+  {
+   "default": "0",
+   "fieldname": "hide_unavailable_items",
+   "fieldtype": "Check",
+   "label": "Hide Unavailable Items"
   }
  ],
  "icon": "icon-cog",
  "idx": 1,
- "modified": "2019-05-25 22:56:30.352693",
+ "links": [],
+ "modified": "2020-10-16 04:33:57.283873",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Profile",

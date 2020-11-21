@@ -44,17 +44,6 @@ status_map = {
 		["Closed", "eval:self.status=='Closed'"],
 		["On Hold", "eval:self.status=='On Hold'"],
 	],
-	"Purchase Invoice": [
-		["Draft", None],
-		["Submitted", "eval:self.docstatus==1"],
-		["Paid", "eval:self.outstanding_amount==0 and self.docstatus==1"],
-		["Return", "eval:self.is_return==1 and self.docstatus==1"],
-		["Debit Note Issued",
-		 "eval:self.outstanding_amount <= 0 and self.docstatus==1 and self.is_return==0 and get_value('Purchase Invoice', {'is_return': 1, 'return_against': self.name, 'docstatus': 1})"],
-		["Unpaid", "eval:self.outstanding_amount > 0 and getdate(self.due_date) >= getdate(nowdate()) and self.docstatus==1"],
-		["Overdue", "eval:self.outstanding_amount > 0 and getdate(self.due_date) < getdate(nowdate()) and self.docstatus==1"],
-		["Cancelled", "eval:self.docstatus==2"],
-	],
 	"Purchase Order": [
 		["Draft", None],
 		["To Receive and Bill", "eval:self.per_received < 100 and self.per_billed < 100 and self.docstatus == 1"],
@@ -182,7 +171,7 @@ class StatusUpdater(Document):
 						if args.get('no_allowance'):
 							item['reduce_by'] = item[args['target_field']] - item[args['target_ref_field']]
 							if item['reduce_by'] > .01:
-								self.limits_crossed_error(args, item)
+								self.limits_crossed_error(args, item, "qty")
 
 						elif item[args['target_ref_field']]:
 							self.check_overflow_with_allowance(item, args)
@@ -257,22 +246,26 @@ class StatusUpdater(Document):
 				if not args.get("second_source_extra_cond"):
 					args["second_source_extra_cond"] = ""
 
-				args['second_source_condition'] = """ + ifnull((select sum(%(second_source_field)s)
+				args['second_source_condition'] = frappe.db.sql(""" select ifnull((select sum(%(second_source_field)s)
 					from `tab%(second_source_dt)s`
 					where `%(second_join_field)s`="%(detail_id)s"
-					and (`tab%(second_source_dt)s`.docstatus=1) %(second_source_extra_cond)s), 0) """ % args
+					and (`tab%(second_source_dt)s`.docstatus=1)
+					%(second_source_extra_cond)s), 0) """ % args)[0][0]
 
 			if args['detail_id']:
 				if not args.get("extra_cond"): args["extra_cond"] = ""
 
-				frappe.db.sql("""update `tab%(target_dt)s`
-					set %(target_field)s = (
+				args["source_dt_value"] = frappe.db.sql("""
 						(select ifnull(sum(%(source_field)s), 0)
 							from `tab%(source_dt)s` where `%(join_field)s`="%(detail_id)s"
 							and (docstatus=1 %(cond)s) %(extra_cond)s)
-						%(second_source_condition)s
-					)
-					%(update_modified)s
+				""" % args)[0][0] or 0.0
+
+				if args['second_source_condition']:
+					args["source_dt_value"] += flt(args['second_source_condition'])
+
+				frappe.db.sql("""update `tab%(target_dt)s`
+					set %(target_field)s = %(source_dt_value)s %(update_modified)s
 					where name='%(detail_id)s'""" % args)
 
 	def _update_percent_field_in_targets(self, args, update_modified=True):
