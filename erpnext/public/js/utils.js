@@ -470,6 +470,33 @@ erpnext.utils.update_child_items = function(opts) {
 		disabled: 0,
 		label: __('Item Code')
 	}, {
+		fieldtype:'Link',
+		fieldname:'uom',
+		options: 'UOM',
+		read_only: 0,
+		label: __('UOM'),
+		reqd: 1,
+		onchange: function () {
+			frappe.call({
+				method: "erpnext.stock.get_item_details.get_conversion_factor",
+				args: { item_code: this.doc.item_code, uom: this.value },
+				callback: r => {
+					if(!r.exc) {
+						if (this.doc.conversion_factor == r.message.conversion_factor) return;
+
+						const docname = this.doc.docname;
+						dialog.fields_dict.trans_items.df.data.some(doc => {
+							if (doc.docname == docname) {
+								doc.conversion_factor = r.message.conversion_factor;
+								dialog.fields_dict.trans_items.grid.refresh();
+								return true;
+							}
+						});
+					}
+				}
+			});
+		},
+	}, {
 		fieldtype:'Float',
 		fieldname:"qty",
 		default: 0,
@@ -480,6 +507,7 @@ erpnext.utils.update_child_items = function(opts) {
 	}, {
 		fieldtype:'Currency',
 		fieldname:"rate",
+		options: "currency",
 		default: 0,
 		read_only: 0,
 		in_list_view: 1,
@@ -552,6 +580,7 @@ erpnext.utils.update_child_items = function(opts) {
 			"conversion_factor": d.conversion_factor,
 			"qty": d.qty,
 			"rate": d.rate,
+			"uom": d.uom
 		});
 		this.data = dialog.fields_dict.trans_items.df.data;
 		dialog.fields_dict.trans_items.grid.refresh();
@@ -665,9 +694,13 @@ erpnext.utils.map_current_doc = function(opts) {
 }
 
 frappe.form.link_formatters['Item'] = function(value, doc) {
-	if(doc && doc.item_name && doc.item_name !== value) {
-		return value? value + ': ' + doc.item_name: doc.item_name;
+	if (doc && value && doc.item_name && doc.item_name !== value) {
+		return value + ': ' + doc.item_name;
+	} else if (!value && doc.doctype && doc.item_name) {
+		// format blank value in child table
+		return doc.item_name;
 	} else {
+		// if value is blank in report view or item code and name are the same, return as is
 		return value;
 	}
 }

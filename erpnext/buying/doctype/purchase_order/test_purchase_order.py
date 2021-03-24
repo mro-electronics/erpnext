@@ -89,7 +89,7 @@ class TestPurchaseOrder(unittest.TestCase):
 		frappe.db.set_value("Accounts Settings", None, "over_billing_allowance", 0)
 
 
-	def test_update_child_qty_rate(self):
+	def test_update_child(self):
 		mr = make_material_request(qty=10)
 		po = make_purchase_order(mr.name)
 		po.supplier = "_Test Supplier"
@@ -119,7 +119,7 @@ class TestPurchaseOrder(unittest.TestCase):
 		self.assertEqual(get_ordered_qty(), existing_ordered_qty + 3)
 
 
-	def test_add_new_item_in_update_child_qty_rate(self):
+	def test_update_child_adding_new_item(self):
 		po = create_purchase_order(do_not_save=1)
 		po.items[0].qty = 4
 		po.save()
@@ -145,7 +145,7 @@ class TestPurchaseOrder(unittest.TestCase):
 		self.assertEqual(po.status, 'To Receive and Bill')
 
 
-	def test_remove_item_in_update_child_qty_rate(self):
+	def test_update_child_removing_item(self):
 		po = create_purchase_order(do_not_save=1)
 		po.items[0].qty = 4
 		po.save()
@@ -185,7 +185,7 @@ class TestPurchaseOrder(unittest.TestCase):
 		self.assertEquals(len(po.get('items')), 1)
 		self.assertEqual(po.status, 'To Receive and Bill')
 
-	def test_update_child_qty_rate_perm(self):
+	def test_update_child_perm(self):
 		po = create_purchase_order(item_code= "_Test Item", qty=4)
 
 		user = 'test@example.com'
@@ -855,7 +855,7 @@ class TestPurchaseOrder(unittest.TestCase):
 			},
 			{
 				"item_code":item_code,"rm_item_code":"Sub Contracted Raw Material 4","item_name":"_Test Item",
-				"qty":250,"warehouse":"_Test Warehouse - _TC", "stock_uom":"Nos", "name": po.supplied_items[1].name
+				"qty":250,"warehouse":"_Test Warehouse - _TC", "stock_uom":"Nos"
 			},
 		]
 
@@ -863,6 +863,10 @@ class TestPurchaseOrder(unittest.TestCase):
 		rm_item_string = json.dumps(rm_items)
 		se = frappe.get_doc(make_subcontract_transfer_entry(po.name, rm_item_string))
 		se.submit()
+
+		# Test po_detail field has value or not
+		for item_row in se.items:
+			self.assertEqual(item_row.po_detail, po.supplied_items[item_row.idx - 1].name)
 
 		po_doc = frappe.get_doc("Purchase Order", po.name)
 		for row in po_doc.supplied_items:

@@ -136,6 +136,8 @@ frappe.ui.form.on('Asset', {
 
 		if (frm.doc.docstatus == 0) {
 			frm.toggle_reqd("finance_books", frm.doc.calculate_depreciation);
+			frm.set_df_property('depreciation_start_date', 'reqd', 1, frm.doc.name, 'finance_books');
+			frm.refresh_field('finance_books');
 		}
 	},
 
@@ -232,7 +234,7 @@ frappe.ui.form.on('Asset', {
 
 
 	item_code: function(frm) {
-		if(frm.doc.item_code) {
+		if(frm.doc.item_code && frm.doc.calculate_depreciation) {
 			frm.trigger('set_finance_book');
 		}
 	},
@@ -323,6 +325,10 @@ frappe.ui.form.on('Asset', {
 
 	calculate_depreciation: function(frm) {
 		frm.toggle_reqd("finance_books", frm.doc.calculate_depreciation);
+
+		if (frm.doc.calculate_depreciation) {
+			frm.trigger('set_finance_book');
+		}
 	},
 
 	gross_purchase_amount: function(frm) {

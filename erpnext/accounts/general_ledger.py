@@ -269,6 +269,7 @@ def make_round_off_gle(gl_map, debit_credit_diff, precision):
 		"cost_center": round_off_cost_center,
 		"party_type": None,
 		"party": None,
+		"is_opening": "No",
 		"against_voucher_type": None,
 		"against_voucher": None
 	})
