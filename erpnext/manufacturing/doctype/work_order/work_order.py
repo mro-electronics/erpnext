@@ -292,7 +292,9 @@ class WorkOrder(Document):
 		self.update_completed_qty_in_material_request()
 		self.update_planned_qty()
 		self.update_ordered_qty()
-		self.create_job_card()
+		# Disables creation of job cards
+		if not cint(frappe.db.get_single_value("Manufacturing Settings", "disable_capacity_planning")):
+			self.create_job_card()
 
 	def on_cancel(self):
 		self.validate_cancel()
@@ -538,7 +540,8 @@ class WorkOrder(Document):
 
 
 		self.set('operations', [])
-		if not self.bom_no or not frappe.get_cached_value('BOM', self.bom_no, 'with_operations'):
+		# Disable creation of operations when capacity planning is disabled
+		if not self.bom_no or not frappe.get_cached_value('BOM', self.bom_no, 'with_operations') or cint(frappe.db.get_single_value("Manufacturing Settings", "disable_capacity_planning")):
 			return
 
 		operations = []
