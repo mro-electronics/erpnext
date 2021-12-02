@@ -325,13 +325,13 @@ class GrossProfitGenerator(object):
 		else:
 			my_sle = self.sle.get((item_code, row.warehouse))
 			if (row.update_stock or row.dn_detail) and my_sle:
-				parenttype, parent = row.parenttype, row.parent
+				parenttype, parent = row.parenttype, (row.parent_invoice if row.parenttype == "Sales Invoice" and row.parent_invoice else row.parent)
 				if row.dn_detail:
 					parenttype, parent = "Delivery Note", row.delivery_note
 
 				for i, sle in enumerate(my_sle):
 					# find the stock valution rate from stock ledger entry
-					if sle.voucher_type == parenttype and parent == sle.voucher_no and \
+					if sle.voucher_type == parenttype and parent == sle.voucher_no  and \
 						sle.voucher_detail_no == row.item_row:
 							previous_stock_value = len(my_sle) > i+1 and \
 								flt(my_sle[i+1].stock_value) or 0.0
