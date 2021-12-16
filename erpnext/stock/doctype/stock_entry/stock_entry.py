@@ -1372,6 +1372,7 @@ class StockEntry(StockController):
 						"stock_uom": item_account_details.stock_uom,
 						"expense_account": item_account_details.get("expense_account"),
 						"cost_center": item_account_details.get("buying_cost_center"),
+						"allow_alternative_item": wo.allow_alternative_item
 					}
 				})
 
