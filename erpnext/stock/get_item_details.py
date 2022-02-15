@@ -978,7 +978,7 @@ def get_conversion_factor(item_code, uom):
 	if not conversion_factor:
 		stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
 		conversion_factor = get_uom_conv_factor(uom, stock_uom)
-	return {"conversion_factor": conversion_factor or 1.0}
+	return {"conversion_factor": conversion_factor or 0}
 
 @frappe.whitelist()
 def get_projected_qty(item_code, warehouse):
