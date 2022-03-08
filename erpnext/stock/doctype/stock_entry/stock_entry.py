@@ -1224,22 +1224,25 @@ class StockEntry(StockController):
 		item_dict = get_bom_items_as_dict(self.bom_no, self.company, qty=qty,
 			fetch_exploded = self.use_multi_level_bom, fetch_qty_in_stock_uom=False)
 
-		used_alternative_items = get_used_alternative_items(work_order = self.work_order)
-		for item in itervalues(item_dict):
-			# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
-			if item["allow_alternative_item"]:
-				item["allow_alternative_item"] = frappe.db.get_value('Work Order',
-					self.work_order, "allow_alternative_item")
+		#ERPNExt Core Customizations March 7, 2022
+		#Note Below code is disabled to let erpnext_core_customizations handle item alternatives
 
-			item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
-			if item.item_code in used_alternative_items:
-				alternative_item_data = used_alternative_items.get(item.item_code)
-				item.item_code = alternative_item_data.item_code
-				item.item_name = alternative_item_data.item_name
-				item.stock_uom = alternative_item_data.stock_uom
-				item.uom = alternative_item_data.uom
-				item.conversion_factor = alternative_item_data.conversion_factor
-				item.description = alternative_item_data.description
+		#used_alternative_items = get_used_alternative_items(work_order = self.work_order)
+		#for item in itervalues(item_dict):
+		#		# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
+		#	if item["allow_alternative_item"]:
+		#		item["allow_alternative_item"] = frappe.db.get_value('Work Order',
+		#			self.work_order, "allow_alternative_item")
+		#
+		#	item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
+		#	if item.item_code in used_alternative_items:
+		#		alternative_item_data = used_alternative_items.get(item.item_code)
+		#		item.item_code = alternative_item_data.item_code
+		#		item.item_name = alternative_item_data.item_name
+		#		item.stock_uom = alternative_item_data.stock_uom
+		#		item.uom = alternative_item_data.uom
+		#		item.conversion_factor = alternative_item_data.conversion_factor
+		#		item.description = alternative_item_data.description
 
 		return item_dict
 
@@ -1372,7 +1375,6 @@ class StockEntry(StockController):
 						"stock_uom": item_account_details.stock_uom,
 						"expense_account": item_account_details.get("expense_account"),
 						"cost_center": item_account_details.get("buying_cost_center"),
-						"allow_alternative_item": wo.allow_alternative_item
 					}
 				})
 
@@ -1512,9 +1514,11 @@ class StockEntry(StockController):
 			if not item_dict[item]["qty"]:
 				del item_dict[item]
 
+		#ERPNExt Core Customizations March 7,2021
+		#Removed because 0 qty in stock entry is part of the workflow
 		# show some message
-		if not len(item_dict):
-			frappe.msgprint(_("""All items have already been transferred for this Work Order."""))
+		#if not len(item_dict):
+		#	frappe.msgprint(_("""All items have already been transferred for this Work Order."""))
 
 		return item_dict
 
