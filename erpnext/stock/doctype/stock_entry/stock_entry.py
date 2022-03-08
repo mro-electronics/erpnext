@@ -1226,23 +1226,24 @@ class StockEntry(StockController):
 
 		#ERPNExt Core Customizations March 7, 2022
 		#Note Below code is disabled to let erpnext_core_customizations handle item alternatives
-
 		#used_alternative_items = get_used_alternative_items(work_order = self.work_order)
-		#for item in itervalues(item_dict):
-		#		# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
-		#	if item["allow_alternative_item"]:
-		#		item["allow_alternative_item"] = frappe.db.get_value('Work Order',
-		#			self.work_order, "allow_alternative_item")
-		#
-		#	item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
-		#	if item.item_code in used_alternative_items:
-		#		alternative_item_data = used_alternative_items.get(item.item_code)
-		#		item.item_code = alternative_item_data.item_code
-		#		item.item_name = alternative_item_data.item_name
-		#		item.stock_uom = alternative_item_data.stock_uom
-		#		item.uom = alternative_item_data.uom
-		#		item.conversion_factor = alternative_item_data.conversion_factor
-		#		item.description = alternative_item_data.description
+
+		used_alternative_items = {}
+		for item in itervalues(item_dict):
+				# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
+			if item["allow_alternative_item"]:
+				item["allow_alternative_item"] = frappe.db.get_value('Work Order',
+					self.work_order, "allow_alternative_item")
+
+			item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
+			if item.item_code in used_alternative_items:
+				alternative_item_data = used_alternative_items.get(item.item_code)
+				item.item_code = alternative_item_data.item_code
+				item.item_name = alternative_item_data.item_name
+				item.stock_uom = alternative_item_data.stock_uom
+				item.uom = alternative_item_data.uom
+				item.conversion_factor = alternative_item_data.conversion_factor
+				item.description = alternative_item_data.description
 
 		return item_dict
 
