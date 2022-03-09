@@ -250,17 +250,13 @@ def get_pricing_rule_for_item(args, price_list_rate=0, doc=None, for_validate=Fa
 		"free_item_data": [],
 		"parent": args.parent,
 		"parenttype": args.parenttype,
-		"child_docname": args.get('child_docname'),
+		"child_docname": args.get('child_docname')
 	})
 
 	if args.ignore_pricing_rule or not args.item_code:
 		if frappe.db.exists(args.doctype, args.name) and args.get("pricing_rules"):
-			item_details = remove_pricing_rule_for_item(
-				args.get("pricing_rules"),
-				item_details,
-				item_code=args.get("item_code"),
-				rate=args.get("price_list_rate"),
-			)
+			item_details = remove_pricing_rule_for_item(args.get("pricing_rules"),
+				item_details, args.get('item_code'))
 		return item_details
 
 	update_args_for_pricing_rule(args)
@@ -313,12 +309,8 @@ def get_pricing_rule_for_item(args, price_list_rate=0, doc=None, for_validate=Fa
 		if not doc: return item_details
 
 	elif args.get("pricing_rules"):
-		item_details = remove_pricing_rule_for_item(
-			args.get("pricing_rules"),
-			item_details,
-			item_code=args.get("item_code"),
-			rate=args.get("price_list_rate"),
-		)
+		item_details = remove_pricing_rule_for_item(args.get("pricing_rules"),
+			item_details, args.get('item_code'))
 
 	return item_details
 
@@ -399,7 +391,7 @@ def apply_price_discount_rule(pricing_rule, item_details, args):
 			item_details[field] += (pricing_rule.get(field, 0)
 				if pricing_rule else args.get(field, 0))
 
-def remove_pricing_rule_for_item(pricing_rules, item_details, item_code=None, rate=None):
+def remove_pricing_rule_for_item(pricing_rules, item_details, item_code=None):
 	from erpnext.accounts.doctype.pricing_rule.utils import (
 		get_applied_pricing_rules,
 		get_pricing_rule_items,
@@ -412,7 +404,6 @@ def remove_pricing_rule_for_item(pricing_rules, item_details, item_code=None, ra
 			if pricing_rule.rate_or_discount == 'Discount Percentage':
 				item_details.discount_percentage = 0.0
 				item_details.discount_amount = 0.0
-				item_details.rate = rate or 0.0
 
 			if pricing_rule.rate_or_discount == 'Discount Amount':
 				item_details.discount_amount = 0.0
@@ -431,7 +422,6 @@ def remove_pricing_rule_for_item(pricing_rules, item_details, item_code=None, ra
 			item_details.applied_on_items = ','.join(items)
 
 	item_details.pricing_rules = ''
-	item_details.pricing_rule_removed = True
 
 	return item_details
 
@@ -443,12 +433,9 @@ def remove_pricing_rules(item_list):
 	out = []
 	for item in item_list:
 		item = frappe._dict(item)
-		if item.get("pricing_rules"):
-			out.append(
-				remove_pricing_rule_for_item(
-					item.get("pricing_rules"), item, item.item_code, item.get("price_list_rate")
-				)
-			)
+		if item.get('pricing_rules'):
+			out.append(remove_pricing_rule_for_item(item.get("pricing_rules"),
+				item, item.item_code))
 
 	return out
 

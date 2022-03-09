@@ -75,8 +75,10 @@ class TestLeaveApplication(unittest.TestCase):
 			frappe.db.sql("DELETE FROM `tab%s`" % dt) #nosec
 
 		frappe.set_user("Administrator")
-		set_leave_approver()
 
+	@classmethod
+	def setUpClass(cls):
+		set_leave_approver()
 		frappe.db.sql("delete from tabAttendance where employee='_T-Employee-00001'")
 
 	def tearDown(self):
@@ -132,11 +134,10 @@ class TestLeaveApplication(unittest.TestCase):
 		make_allocation_record(leave_type=leave_type.name, from_date=get_year_start(date), to_date=get_year_ending(date))
 
 		holiday_list = make_holiday_list()
-		employee = get_employee()
-		frappe.db.set_value("Company", employee.company, "default_holiday_list", holiday_list)
+		frappe.db.set_value("Company", "_Test Company", "default_holiday_list", holiday_list)
 		first_sunday = get_first_sunday(holiday_list)
 
-		leave_application = make_leave_application(employee.name, first_sunday, add_days(first_sunday, 3), leave_type.name)
+		leave_application = make_leave_application("_T-Employee-00001", first_sunday, add_days(first_sunday, 3), leave_type.name)
 		leave_application.reload()
 		self.assertEqual(leave_application.total_leave_days, 4)
 		self.assertEqual(frappe.db.count('Attendance', {'leave_application': leave_application.name}), 4)
@@ -156,28 +157,25 @@ class TestLeaveApplication(unittest.TestCase):
 		make_allocation_record(leave_type=leave_type.name, from_date=get_year_start(date), to_date=get_year_ending(date))
 
 		holiday_list = make_holiday_list()
-		employee = get_employee()
-		frappe.db.set_value("Company", employee.company, "default_holiday_list", holiday_list)
+		frappe.db.set_value("Company", "_Test Company", "default_holiday_list", holiday_list)
 		first_sunday = get_first_sunday(holiday_list)
 
 		# already marked attendance on a holiday should be deleted in this case
 		config = {
 			"doctype": "Attendance",
-			"employee": employee.name,
+			"employee": "_T-Employee-00001",
 			"status": "Present"
 		}
 		attendance_on_holiday = frappe.get_doc(config)
 		attendance_on_holiday.attendance_date = first_sunday
-		attendance_on_holiday.flags.ignore_validate = True
 		attendance_on_holiday.save()
 
 		# already marked attendance on a non-holiday should be updated
 		attendance = frappe.get_doc(config)
 		attendance.attendance_date = add_days(first_sunday, 3)
-		attendance.flags.ignore_validate = True
 		attendance.save()
 
-		leave_application = make_leave_application(employee.name, first_sunday, add_days(first_sunday, 3), leave_type.name)
+		leave_application = make_leave_application("_T-Employee-00001", first_sunday, add_days(first_sunday, 3), leave_type.name)
 		leave_application.reload()
 		# holiday should be excluded while marking attendance
 		self.assertEqual(leave_application.total_leave_days, 3)
@@ -327,7 +325,7 @@ class TestLeaveApplication(unittest.TestCase):
 		employee = get_employee()
 
 		default_holiday_list = make_holiday_list()
-		frappe.db.set_value("Company", employee.company, "default_holiday_list", default_holiday_list)
+		frappe.db.set_value("Company", "_Test Company", "default_holiday_list", default_holiday_list)
 		first_sunday = get_first_sunday(default_holiday_list)
 
 		optional_leave_date = add_days(first_sunday, 1)
@@ -545,7 +543,7 @@ class TestLeaveApplication(unittest.TestCase):
 		from erpnext.hr.utils import allocate_earned_leaves
 		i = 0
 		while(i<14):
-			allocate_earned_leaves(ignore_duplicates=True)
+			allocate_earned_leaves()
 			i += 1
 		self.assertEqual(get_leave_balance_on(employee.name, leave_type, nowdate()), 6)
 
@@ -553,7 +551,7 @@ class TestLeaveApplication(unittest.TestCase):
 		frappe.db.set_value('Leave Type', leave_type, 'max_leaves_allowed', 0)
 		i = 0
 		while(i<6):
-			allocate_earned_leaves(ignore_duplicates=True)
+			allocate_earned_leaves()
 			i += 1
 		self.assertEqual(get_leave_balance_on(employee.name, leave_type, nowdate()), 9)
 

@@ -6,7 +6,6 @@ import frappe
 from frappe import _, msgprint
 from frappe.desk.reportview import get_match_cond
 from frappe.model.document import Document
-from frappe.query_builder.functions import Min
 from frappe.utils import comma_and, get_link_to_form, getdate
 
 
@@ -61,15 +60,8 @@ class ProgramEnrollment(Document):
 			frappe.throw(_("Student is already enrolled."))
 
 	def update_student_joining_date(self):
-		table = frappe.qb.DocType('Program Enrollment')
-		date = (
-			frappe.qb.from_(table)
-				.select(Min(table.enrollment_date).as_('enrollment_date'))
-				.where(table.student == self.student)
-		).run(as_dict=True)
-
-		if date:
-			frappe.db.set_value("Student", self.student, "joining_date", date[0].enrollment_date)
+		date = frappe.db.sql("select min(enrollment_date) from `tabProgram Enrollment` where student= %s", self.student)
+		frappe.db.set_value("Student", self.student, "joining_date", date)
 
 	def make_fee_records(self):
 		from erpnext.education.api import get_fee_components

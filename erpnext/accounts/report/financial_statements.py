@@ -285,8 +285,7 @@ def add_total_row(out, root_type, balance_must_be, period_list, company_currency
 	total_row = {
 		"account_name": _("Total {0} ({1})").format(_(root_type), _(balance_must_be)),
 		"account": _("Total {0} ({1})").format(_(root_type), _(balance_must_be)),
-		"currency": company_currency,
-		"opening_balance": 0.0
+		"currency": company_currency
 	}
 
 	for row in out:
@@ -298,7 +297,6 @@ def add_total_row(out, root_type, balance_must_be, period_list, company_currency
 
 			total_row.setdefault("total", 0.0)
 			total_row["total"] += flt(row["total"])
-			total_row["opening_balance"] += row["opening_balance"]
 			row["total"] = ""
 
 	if "total" in total_row:

@@ -20,7 +20,6 @@ def send_reminders_in_advance_weekly():
 
 	send_advance_holiday_reminders("Weekly")
 
-
 def send_reminders_in_advance_monthly():
 	to_send_in_advance = int(frappe.db.get_single_value("HR Settings", "send_holiday_reminders"))
 	frequency = frappe.db.get_single_value("HR Settings", "frequency")
@@ -28,7 +27,6 @@ def send_reminders_in_advance_monthly():
 		return
 
 	send_advance_holiday_reminders("Monthly")
-
 
 def send_advance_holiday_reminders(frequency):
 	"""Send Holiday Reminders in Advance to Employees
@@ -44,7 +42,7 @@ def send_advance_holiday_reminders(frequency):
 	else:
 		return
 
-	employees = frappe.db.get_all('Employee', filters={'status': 'Active'}, pluck='name')
+	employees = frappe.db.get_all('Employee', pluck='name')
 	for employee in employees:
 		holidays = get_holidays_for_employee(
 			employee,
@@ -53,13 +51,10 @@ def send_advance_holiday_reminders(frequency):
 			raise_exception=False
 		)
 
-		send_holidays_reminder_in_advance(employee, holidays)
-
+		if not (holidays is None):
+			send_holidays_reminder_in_advance(employee, holidays)
 
 def send_holidays_reminder_in_advance(employee, holidays):
-	if not holidays:
-		return
-
 	employee_doc = frappe.get_doc('Employee', employee)
 	employee_email = get_employee_email(employee_doc)
 	frequency = frappe.db.get_single_value("HR Settings", "frequency")
@@ -106,7 +101,6 @@ def send_birthday_reminders():
 				reminder_text, message = get_birthday_reminder_text_and_message(others)
 				send_birthday_reminder(person_email, reminder_text, others, message)
 
-
 def get_birthday_reminder_text_and_message(birthday_persons):
 	if len(birthday_persons) == 1:
 		birthday_person_text = birthday_persons[0]['name']
@@ -122,7 +116,6 @@ def get_birthday_reminder_text_and_message(birthday_persons):
 
 	return reminder_text, message
 
-
 def send_birthday_reminder(recipients, reminder_text, birthday_persons, message):
 	frappe.sendmail(
 		recipients=recipients,
@@ -136,11 +129,9 @@ def send_birthday_reminder(recipients, reminder_text, birthday_persons, message)
 		header=_("Birthday Reminder 🎂")
 	)
 
-
 def get_employees_who_are_born_today():
 	"""Get all employee born today & group them based on their company"""
 	return get_employees_having_an_event_today("birthday")
-
 
 def get_employees_having_an_event_today(event_type):
 	"""Get all employee who have `event_type` today
@@ -219,14 +210,13 @@ def send_work_anniversary_reminders():
 				reminder_text, message = get_work_anniversary_reminder_text_and_message(others)
 				send_work_anniversary_reminder(person_email, reminder_text, others, message)
 
-
 def get_work_anniversary_reminder_text_and_message(anniversary_persons):
 	if len(anniversary_persons) == 1:
 		anniversary_person = anniversary_persons[0]['name']
 		persons_name = anniversary_person
 		# Number of years completed at the company
 		completed_years = getdate().year - anniversary_persons[0]['date_of_joining'].year
-		anniversary_person += f" completed {completed_years} year(s)"
+		anniversary_person += f" completed {completed_years} years"
 	else:
 		person_names_with_years = []
 		names = []
@@ -235,7 +225,7 @@ def get_work_anniversary_reminder_text_and_message(anniversary_persons):
 			names.append(person_text)
 			# Number of years completed at the company
 			completed_years = getdate().year - person['date_of_joining'].year
-			person_text += f" completed {completed_years} year(s)"
+			person_text += f" completed {completed_years} years"
 			person_names_with_years.append(person_text)
 
 		# converts ["Jim", "Rim", "Dim"] to Jim, Rim & Dim
@@ -249,7 +239,6 @@ def get_work_anniversary_reminder_text_and_message(anniversary_persons):
 
 	return reminder_text, message
 
-
 def send_work_anniversary_reminder(recipients, reminder_text, anniversary_persons, message):
 	frappe.sendmail(
 		recipients=recipients,
@@ -260,5 +249,5 @@ def send_work_anniversary_reminder(recipients, reminder_text, anniversary_person
 			anniversary_persons=anniversary_persons,
 			message=message,
 		),
-		header=_("Work Anniversary Reminder")
+		header=_("🎊️🎊️ Work Anniversary Reminder 🎊️🎊️")
 	)

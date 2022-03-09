@@ -29,11 +29,9 @@ def execute():
 	""")
 
 	for item_code, warehouse in repost_for:
-		if not (item_code and warehouse):
-			continue
-		update_bin_qty(item_code, warehouse, {
-			"reserved_qty": get_reserved_qty(item_code, warehouse)
-		})
+			update_bin_qty(item_code, warehouse, {
+				"reserved_qty": get_reserved_qty(item_code, warehouse)
+			})
 
 	frappe.db.sql("""delete from tabBin
 		where exists(

@@ -545,7 +545,7 @@ $.extend(erpnext.item, {
 			let selected_attributes = {};
 			me.multiple_variant_dialog.$wrapper.find('.form-column').each((i, col) => {
 				if(i===0) return;
-				let attribute_name = $(col).find('label').html().trim();
+				let attribute_name = $(col).find('label').html();
 				selected_attributes[attribute_name] = [];
 				let checked_opts = $(col).find('.checkbox input');
 				checked_opts.each((i, opt) => {
@@ -594,7 +594,7 @@ $.extend(erpnext.item, {
 							const increment = r.message.increment;
 
 							let values = [];
-							for(var i = from; i <= to; i = flt(i + increment, 6)) {
+							for(var i = from; i <= to; i += increment) {
 								values.push(i);
 							}
 							attr_val_fields[d.attribute] = values;

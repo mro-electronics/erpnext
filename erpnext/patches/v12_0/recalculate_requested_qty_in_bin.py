@@ -10,8 +10,6 @@ def execute():
 		FROM `tabBin`""",as_dict=1)
 
 	for entry in bin_details:
-		if not (entry.item_code and entry.warehouse):
-			continue
 		update_bin_qty(entry.get("item_code"), entry.get("warehouse"), {
 			"indented_qty": get_indented_qty(entry.get("item_code"), entry.get("warehouse"))
 		})
