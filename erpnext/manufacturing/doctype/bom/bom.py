@@ -954,7 +954,9 @@ def get_bom_items_as_dict(
 	qty=1,
 	fetch_exploded=1,
 	fetch_scrap_items=0,
-	include_non_stock_items=False,
+	#  June 2, 2021 . Changed to allow molds in boms
+	# include_non_stock_items=False
+	include_non_stock_items=True,
 	fetch_qty_in_stock_uom=True,
 ):
 	item_dict = {}
