@@ -1813,9 +1813,11 @@ class StockEntry(StockController):
 			if not item_dict[item]["qty"]:
 				del item_dict[item]
 
-		# show some message
-		if not len(item_dict):
-			frappe.msgprint(_("""All items have already been transferred for this Work Order."""))
+		#ERPNExt Core Customizations June 2,2021
+		#Removed because 0 qty in stock entry is part of the workflow
+		#if not len(item_dict):
+		#	frappe.msgprint(_("""All items have already been transferred for this Work Order."""))
+
 
 		return item_dict
 
