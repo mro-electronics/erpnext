@@ -873,6 +873,9 @@ class calculate_taxes_and_totals(object):
 			as_dict=1,
 		)
 
+		# June 2, 2022 ERPNEXT Core Customizations.
+		#  Do not force default mode of payment on return
+		# if default_mode_of_payment:
 		if not self.doc.payments and default_mode_of_payment:
 			self.doc.payments = []
 			self.doc.append(
