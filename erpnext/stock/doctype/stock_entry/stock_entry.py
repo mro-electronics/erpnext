@@ -1493,32 +1493,16 @@ class StockEntry(StockController):
 			fetch_qty_in_stock_uom=False,
 		)
 
-		#ERPNExt Core Customizations June 6, 2022
+				#ERPNExt Core Customizations 2022-08-22
 		#Note Below code is disabled to let erpnext_core_customizations handle item alternatives
-		# used_alternative_items = get_used_alternative_items(work_order=self.work_order)
-		# for item in itervalues(item_dict):
-		# 	# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
-		# 	if item["allow_alternative_item"]:
-		# 		item["allow_alternative_item"] = frappe.db.get_value(
-		# 			"Work Order", self.work_order, "allow_alternative_item"
-		# 		)
-		#
-		# 	item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
-		# 	if item.item_code in used_alternative_items:
-		# 		alternative_item_data = used_alternative_items.get(item.item_code)
-		# 		item.item_code = alternative_item_data.item_code
-		# 		item.item_name = alternative_item_data.item_name
-		# 		item.stock_uom = alternative_item_data.stock_uom
-		# 		item.uom = alternative_item_data.uom
-		# 		item.conversion_factor = alternative_item_data.conversion_factor
-		# 		item.description = alternative_item_data.description
-
+		#used_alternative_items = get_used_alternative_items(work_order=self.work_order)
 		used_alternative_items = {}
 		for item in itervalues(item_dict):
-				# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
+			# if source warehouse presents in BOM set from_warehouse as bom source_warehouse
 			if item["allow_alternative_item"]:
-				item["allow_alternative_item"] = frappe.db.get_value('Work Order',
-					self.work_order, "allow_alternative_item")
+				item["allow_alternative_item"] = frappe.db.get_value(
+					"Work Order", self.work_order, "allow_alternative_item"
+				)
 
 			item.from_warehouse = self.from_warehouse or item.source_warehouse or item.default_warehouse
 			if item.item_code in used_alternative_items:
@@ -1832,7 +1816,7 @@ class StockEntry(StockController):
 			if not item_dict[item]["qty"]:
 				del item_dict[item]
 
-		#ERPNExt Core Customizations June 2,2021
+		#ERPNExt Core Customizations 2022-08-22
 		#Removed because 0 qty in stock entry is part of the workflow
 		#if not len(item_dict):
 		#	frappe.msgprint(_("""All items have already been transferred for this Work Order."""))
