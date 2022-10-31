@@ -370,6 +370,7 @@ class WorkOrder(Document):
 		self.update_ordered_qty()
 		# self.create_job_card()
 		# MRO ERPNEXT MODIFICATION 2022-08-30
+		# ERPNext core customizations
 		# Disables creation of job cards
 		if not cint(frappe.db.get_single_value("Manufacturing Settings", "disable_capacity_planning")):
 			self.create_job_card()
@@ -685,6 +686,7 @@ class WorkOrder(Document):
 		self.set("operations", [])
 		# Disable creation of operations when capacity planning is disabled
 		# ERPNEXT MRO Modification 2022-08-30
+		# erpnext core customization
 		if not self.bom_no or not frappe.get_cached_value('BOM', self.bom_no, 'with_operations') or cint(
 			frappe.db.get_single_value("Manufacturing Settings", "disable_capacity_planning")):
 			return
