@@ -24,6 +24,7 @@ class PricingRule(Document):
 		self.validate_applicable_for_selling_or_buying()
 		self.validate_min_max_amt()
 		self.validate_min_max_qty()
+		self.validate_recursion()
 		self.cleanup_fields_value()
 		self.validate_rate_or_discount()
 		self.validate_max_discount()
@@ -108,6 +109,18 @@ class PricingRule(Document):
 	def validate_min_max_amt(self):
 		if self.min_amt and self.max_amt and flt(self.min_amt) > flt(self.max_amt):
 			throw(_("Min Amt can not be greater than Max Amt"))
+
+	def validate_recursion(self):
+		if self.price_or_product_discount != "Product":
+			return
+		if self.free_item or self.same_item:
+			if flt(self.recurse_for) <= 0:
+				self.recurse_for = 1
+		if self.is_recursive:
+			if flt(self.apply_recursion_over) > flt(self.min_qty):
+				throw(_("Min Qty should be greater than Recurse Over Qty"))
+			if flt(self.apply_recursion_over) < 0:
+				throw(_("Recurse Over Qty cannot be less than 0"))
 
 	def cleanup_fields_value(self):
 		for logic_field in ["apply_on", "applicable_for", "rate_or_discount"]:
@@ -243,7 +256,7 @@ def apply_pricing_rule(args, doc=None):
 	for item in item_list:
 		args_copy = copy.deepcopy(args)
 		args_copy.update(item)
-		data = get_pricing_rule_for_item(args_copy, item.get("price_list_rate"), doc=doc)
+		data = get_pricing_rule_for_item(args_copy, doc=doc)
 		out.append(data)
 
 		if (
@@ -280,7 +293,7 @@ def update_pricing_rule_uom(pricing_rule, args):
 			pricing_rule.uom = row.uom
 
 
-def get_pricing_rule_for_item(args, price_list_rate=0, doc=None, for_validate=False):
+def get_pricing_rule_for_item(args, doc=None, for_validate=False):
 	from erpnext.accounts.doctype.pricing_rule.utils import (
 		get_applied_pricing_rules,
 		get_pricing_rule_items,

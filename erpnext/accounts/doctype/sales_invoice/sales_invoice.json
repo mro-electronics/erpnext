@@ -64,6 +64,7 @@
   "taxes_and_charges",
   "column_break_38",
   "shipping_rule",
+  "incoterm",
   "column_break_55",
   "tax_category",
   "section_break_40",
@@ -919,6 +920,7 @@
    "fieldtype": "Table",
    "hide_days": 1,
    "hide_seconds": 1,
+   "label": "Sales Taxes and Charges",
    "oldfieldname": "other_charges",
    "oldfieldtype": "Table",
    "options": "Sales Taxes and Charges"
@@ -2090,13 +2092,19 @@
   {
    "collapsible": 1,
    "collapsible_depends_on": "write_off_amount",
-   "depends_on": "grand_total",
+   "depends_on": "is_pos",
    "fieldname": "write_off_section",
    "fieldtype": "Section Break",
    "hide_days": 1,
    "hide_seconds": 1,
    "label": "Write Off",
    "width": "50%"
+  },
+  {
+   "fieldname": "incoterm",
+   "fieldtype": "Link",
+   "label": "Incoterm",
+   "options": "Incoterm"
   }
  ],
  "icon": "fa fa-file-text",
@@ -2109,7 +2117,7 @@
    "link_fieldname": "consolidated_invoice"
   }
  ],
- "modified": "2022-10-11 13:07:36.488095",
+ "modified": "2022-12-05 16:18:14.532114",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Sales Invoice",
