@@ -16,6 +16,7 @@
   "for_qty",
   "column_break_4",
   "parent_warehouse",
+  "consider_rejected_warehouses",
   "get_item_locations",
   "section_break_6",
   "scan_barcode",
@@ -26,7 +27,8 @@
   "locations",
   "amended_from",
   "print_settings_section",
-  "group_same_items"
+  "group_same_items",
+  "status"
  ],
  "fields": [
   {
@@ -168,11 +170,33 @@
    "fieldtype": "Data",
    "label": "Customer Name",
    "read_only": 1
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "no_copy": 1,
+   "options": "Draft\nOpen\nCompleted\nCancelled",
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "description": "Enable it if users want to consider rejected materials to dispatch.",
+   "fieldname": "consider_rejected_warehouses",
+   "fieldtype": "Check",
+   "label": "Consider Rejected Warehouses"
   }
  ],
  "is_submittable": 1,
  "links": [],
- "modified": "2022-07-19 11:03:04.442174",
+ "modified": "2024-01-24 17:05:20.317180",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Pick List",

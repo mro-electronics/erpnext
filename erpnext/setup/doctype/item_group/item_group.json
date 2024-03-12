@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_guest_to_view": 1,
  "allow_import": 1,
  "allow_rename": 1,
  "autoname": "field:item_group_name",
@@ -123,6 +124,7 @@
    "fieldname": "route",
    "fieldtype": "Data",
    "label": "Route",
+   "no_copy": 1,
    "unique": 1
   },
   {
@@ -226,17 +228,17 @@
    "label": "Include Descendants"
   }
  ],
+ "has_web_view": 1,
  "icon": "fa fa-sitemap",
  "idx": 1,
  "image_field": "image",
  "is_tree": 1,
  "links": [],
  "max_attachments": 3,
- "modified": "2022-03-09 12:27:11.055782",
+ "modified": "2024-02-22 16:23:46.936496",
  "modified_by": "Administrator",
  "module": "Setup",
  "name": "Item Group",
- "name_case": "Title Case",
  "naming_rule": "By fieldname",
  "nsm_parent_field": "parent_item_group",
  "owner": "Administrator",

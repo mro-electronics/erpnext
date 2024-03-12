@@ -101,7 +101,6 @@ frappe.ui.form.on('Stock Entry', {
 			}
 		});
 
-
 		frm.add_fetch("bom_no", "inspection_required", "inspection_required");
 		erpnext.accounts.dimensions.setup_dimension_filters(frm, frm.doctype);
 
@@ -112,6 +111,10 @@ frappe.ui.form.on('Stock Entry', {
 			}
 		});
 		attach_bom_items(frm.doc.bom_no);
+
+		if(!check_should_not_attach_bom_items(frm.doc.bom_no)) {
+			erpnext.accounts.dimensions.update_dimension(frm, frm.doctype);
+		}
 	},
 
 	setup_quality_inspection: function(frm) {
@@ -165,6 +168,8 @@ frappe.ui.form.on('Stock Entry', {
 	},
 
 	refresh: function(frm) {
+		frm.trigger("get_items_from_transit_entry");
+
 		if(!frm.doc.docstatus) {
 			frm.trigger('validate_purpose_consumption');
 			frm.add_custom_button(__('Material Request'), function() {
@@ -236,7 +241,7 @@ frappe.ui.form.on('Stock Entry', {
 			}
 		}
 
-		if (frm.doc.docstatus===0) {
+		if (frm.doc.docstatus === 0) {
 			frm.add_custom_button(__('Purchase Invoice'), function() {
 				erpnext.utils.map_current_doc({
 					method: "erpnext.accounts.doctype.purchase_invoice.purchase_invoice.make_stock_entry",
@@ -289,7 +294,8 @@ frappe.ui.form.on('Stock Entry', {
 				})
 			}, __("Get Items From"));
 		}
-		if (frm.doc.docstatus===0 && frm.doc.purpose == "Material Issue") {
+
+		if (frm.doc.docstatus === 0 && frm.doc.purpose == "Material Issue") {
 			frm.add_custom_button(__('Expired Batches'), function() {
 				frappe.call({
 					method: "erpnext.stock.doctype.stock_entry.stock_entry.get_expired_batch_items",
@@ -326,7 +332,42 @@ frappe.ui.form.on('Stock Entry', {
 		}
 
 		frm.trigger("setup_quality_inspection");
-		attach_bom_items(frm.doc.bom_no)
+		attach_bom_items(frm.doc.bom_no);
+
+		if(!check_should_not_attach_bom_items(frm.doc.bom_no)) {
+			erpnext.accounts.dimensions.update_dimension(frm, frm.doctype);
+		}
+
+		let batch_field = frm.get_docfield('items', 'batch_no');
+		if (batch_field) {
+			batch_field.get_route_options_for_new_doc = (row) => {
+				return {
+					'item': row.doc.item_code
+				}
+			};
+		}
+	},
+
+	get_items_from_transit_entry: function(frm) {
+		if (frm.doc.docstatus===0) {
+			frm.add_custom_button(__('Transit Entry'), function() {
+				erpnext.utils.map_current_doc({
+					method: "erpnext.stock.doctype.stock_entry.stock_entry.make_stock_in_entry",
+					source_doctype: "Stock Entry",
+					target: frm,
+					date_field: "posting_date",
+					setters: {
+						stock_entry_type: "Material Transfer",
+						purpose: "Material Transfer",
+					},
+					get_query_filters: {
+						docstatus: 1,
+						purpose: "Material Transfer",
+						add_to_transit: 1,
+					}
+				})
+			}, __("Get Items From"));
+		}
 	},
 
 	before_save: function(frm) {
@@ -339,6 +380,10 @@ frappe.ui.form.on('Stock Entry', {
 		frm.remove_custom_button('Bill of Materials', "Get Items From");
 		frm.events.show_bom_custom_button(frm);
 		frm.trigger('add_to_transit');
+
+		frm.fields_dict.items.grid.update_docfield_property(
+			'basic_rate', 'read_only', frm.doc.purpose == "Material Receipt" ? 0 : 1
+		);
 	},
 
 	purpose: function(frm) {
@@ -472,7 +517,12 @@ frappe.ui.form.on('Stock Entry', {
 				},
 				callback: function(r) {
 					if (!r.exc) {
-						["actual_qty", "basic_rate"].forEach((field) => {
+						let fields = ["actual_qty", "basic_rate"];
+						if (frm.doc.purpose == "Material Receipt") {
+							fields = ["actual_qty"];
+						}
+
+						fields.forEach((field) => {
 							frappe.model.set_value(cdt, cdn, field, (r.message[field] || 0.0));
 						});
 						frm.events.calculate_basic_amount(frm, child);
@@ -498,7 +548,9 @@ frappe.ui.form.on('Stock Entry', {
 
 		let fields = [
 			{"fieldname":"bom", "fieldtype":"Link", "label":__("BOM"),
-			options:"BOM", reqd: 1, get_query: filters()},
+			options:"BOM", reqd: 1, get_query: () => {
+				return {filters: { docstatus:1, "is_active": 1 }};
+			}},
 			{"fieldname":"source_warehouse", "fieldtype":"Link", "label":__("Source Warehouse"),
 			options:"Warehouse"},
 			{"fieldname":"target_warehouse", "fieldtype":"Link", "label":__("Target Warehouse"),
@@ -645,6 +697,21 @@ frappe.ui.form.on('Stock Entry', {
 			});
 		}
 	},
+
+	process_loss_qty(frm) {
+		if (frm.doc.process_loss_qty) {
+			frm.doc.process_loss_percentage = flt(frm.doc.process_loss_qty / frm.doc.fg_completed_qty * 100, precision("process_loss_qty", frm.doc));
+			refresh_field("process_loss_percentage");
+		}
+	},
+
+	process_loss_percentage(frm) {
+		debugger
+		if (frm.doc.process_loss_percentage) {
+			frm.doc.process_loss_qty = flt((frm.doc.fg_completed_qty * frm.doc.process_loss_percentage) / 100 , precision("process_loss_qty", frm.doc));
+			refresh_field("process_loss_qty");
+		}
+	}
 });
 
 frappe.ui.form.on('Stock Entry Detail', {
@@ -939,7 +1006,10 @@ erpnext.stock.StockEntry = class StockEntry extends erpnext.stock.StockControlle
 				method: "get_items",
 				callback: function(r) {
 					if(!r.exc) refresh_field("items");
-					if(me.frm.doc.bom_no) attach_bom_items(me.frm.doc.bom_no)
+					if(me.frm.doc.bom_no) {
+						attach_bom_items(me.frm.doc.bom_no);
+						erpnext.accounts.dimensions.update_dimension(me.frm, me.frm.doctype);
+					}
 				}
 			});
 		}

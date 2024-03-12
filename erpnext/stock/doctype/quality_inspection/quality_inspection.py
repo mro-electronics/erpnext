@@ -68,6 +68,9 @@ class QualityInspection(Document):
 	def on_cancel(self):
 		self.update_qc_reference()
 
+	def on_trash(self):
+		self.update_qc_reference()
+
 	def validate_readings_status_mandatory(self):
 		for reading in self.readings:
 			if not reading.status:
@@ -221,7 +224,7 @@ class QualityInspection(Document):
 def item_query(doctype, txt, searchfield, start, page_len, filters):
 	from frappe.desk.reportview import get_match_cond
 
-	from_doctype = cstr(filters.get("doctype"))
+	from_doctype = cstr(filters.get("from"))
 	if not from_doctype or not frappe.db.exists("DocType", from_doctype):
 		return []
 
