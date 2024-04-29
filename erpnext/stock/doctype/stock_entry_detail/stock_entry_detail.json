@@ -20,7 +20,6 @@
   "is_finished_item",
   "is_scrap_item",
   "quality_inspection",
-  "is_process_loss",
   "subcontracted_item",
   "section_break_8",
   "description",
@@ -396,7 +395,8 @@
    "no_copy": 1,
    "options": "Material Request",
    "print_hide": 1,
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "fieldname": "material_request_item",
@@ -557,13 +557,8 @@
    "label": "Job Card Item",
    "no_copy": 1,
    "print_hide": 1,
-   "read_only": 1
-  },
-  {
-   "default": "0",
-   "fieldname": "is_process_loss",
-   "fieldtype": "Check",
-   "label": "Is Process Loss"
+   "read_only": 1,
+   "search_index": 1
   },
   {
    "default": "0",
@@ -578,7 +573,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2022-11-02 13:00:34.258828",
+ "modified": "2024-01-12 11:56:04.626103",
  "modified_by": "Administrator",
  "module": "Stock",
  "name": "Stock Entry Detail",

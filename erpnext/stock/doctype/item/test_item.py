@@ -83,6 +83,7 @@ class TestItem(FrappeTestCase):
 	def test_get_item_details(self):
 		# delete modified item price record and make as per test_records
 		frappe.db.sql("""delete from `tabItem Price`""")
+		frappe.db.sql("""delete from `tabBin`""")
 
 		to_check = {
 			"item_code": "_Test Item",
@@ -103,9 +104,25 @@ class TestItem(FrappeTestCase):
 			"batch_no": None,
 			"uom": "_Test UOM",
 			"conversion_factor": 1.0,
+			"reserved_qty": 1,
+			"actual_qty": 5,
+			"projected_qty": 14,
 		}
 
 		make_test_objects("Item Price")
+		make_test_objects(
+			"Bin",
+			[
+				{
+					"item_code": "_Test Item",
+					"warehouse": "_Test Warehouse - _TC",
+					"reserved_qty": 1,
+					"actual_qty": 5,
+					"ordered_qty": 10,
+					"projected_qty": 14,
+				}
+			],
+		)
 
 		company = "_Test Company"
 		currency = frappe.get_cached_value("Company", company, "default_currency")
@@ -129,7 +146,7 @@ class TestItem(FrappeTestCase):
 		)
 
 		for key, value in to_check.items():
-			self.assertEqual(value, details.get(key))
+			self.assertEqual(value, details.get(key), key)
 
 	def test_item_tax_template(self):
 		expected_item_tax_template = [
@@ -505,39 +522,25 @@ class TestItem(FrappeTestCase):
 		self.assertEqual(factor, 1.0)
 
 	def test_item_variant_by_manufacturer(self):
-		fields = [{"field_name": "description"}, {"field_name": "variant_based_on"}]
-		set_item_variant_settings(fields)
+		template = make_item(
+			"_Test Item Variant By Manufacturer", {"has_variants": 1, "variant_based_on": "Manufacturer"}
+		).name
 
-		if frappe.db.exists("Item", "_Test Variant Mfg"):
-			frappe.delete_doc("Item", "_Test Variant Mfg")
-		if frappe.db.exists("Item", "_Test Variant Mfg-1"):
-			frappe.delete_doc("Item", "_Test Variant Mfg-1")
-		if frappe.db.exists("Manufacturer", "MSG1"):
-			frappe.delete_doc("Manufacturer", "MSG1")
+		for manufacturer in ["DFSS", "DASA", "ASAAS"]:
+			if not frappe.db.exists("Manufacturer", manufacturer):
+				m_doc = frappe.new_doc("Manufacturer")
+				m_doc.short_name = manufacturer
+				m_doc.insert()
 
-		template = frappe.get_doc(
-			dict(
-				doctype="Item",
-				item_code="_Test Variant Mfg",
-				has_variant=1,
-				item_group="Products",
-				variant_based_on="Manufacturer",
-			)
-		).insert()
+		self.assertFalse(frappe.db.exists("Item Manufacturer", {"manufacturer": "DFSS"}))
+		variant = get_variant(template, manufacturer="DFSS", manufacturer_part_no="DFSS-123")
 
-		manufacturer = frappe.get_doc(dict(doctype="Manufacturer", short_name="MSG1")).insert()
+		item_manufacturer = frappe.db.exists(
+			"Item Manufacturer", {"manufacturer": "DFSS", "item_code": variant.name}
+		)
+		self.assertTrue(item_manufacturer)
 
-		variant = get_variant(template.name, manufacturer=manufacturer.name)
-		self.assertEqual(variant.item_code, "_Test Variant Mfg-1")
-		self.assertEqual(variant.description, "_Test Variant Mfg")
-		self.assertEqual(variant.manufacturer, "MSG1")
-		variant.insert()
-
-		variant = get_variant(template.name, manufacturer=manufacturer.name, manufacturer_part_no="007")
-		self.assertEqual(variant.item_code, "_Test Variant Mfg-2")
-		self.assertEqual(variant.description, "_Test Variant Mfg")
-		self.assertEqual(variant.manufacturer, "MSG1")
-		self.assertEqual(variant.manufacturer_part_no, "007")
+		frappe.delete_doc("Item Manufacturer", item_manufacturer)
 
 	def test_stock_exists_against_template_item(self):
 		stock_item = frappe.get_all("Stock Ledger Entry", fields=["item_code"], limit=1)
@@ -876,6 +879,8 @@ def create_item(
 	opening_stock=0,
 	is_fixed_asset=0,
 	asset_category=None,
+	buying_cost_center=None,
+	selling_cost_center=None,
 	company="_Test Company",
 ):
 	if not frappe.db.exists("Item", item_code):
@@ -893,7 +898,15 @@ def create_item(
 		item.is_purchase_item = is_purchase_item
 		item.is_customer_provided_item = is_customer_provided_item
 		item.customer = customer or ""
-		item.append("item_defaults", {"default_warehouse": warehouse, "company": company})
+		item.append(
+			"item_defaults",
+			{
+				"default_warehouse": warehouse,
+				"company": company,
+				"selling_cost_center": selling_cost_center,
+				"buying_cost_center": buying_cost_center,
+			},
+		)
 		item.save()
 	else:
 		item = frappe.get_doc("Item", item_code)

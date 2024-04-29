@@ -2,15 +2,17 @@
 # For license information, please see license.txt
 
 
+import collections
+
 import frappe
 from frappe import _
+from frappe.query_builder.functions import IfNull, Sum
 from frappe.utils import cint, flt, get_link_to_form, getdate, nowdate
 
 from erpnext.accounts.doctype.loyalty_program.loyalty_program import validate_loyalty_points
 from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
 	SalesInvoice,
-	get_bank_cash_account,
 	get_mode_of_payment_info,
 	update_multi_mode_option,
 )
@@ -49,10 +51,11 @@ class POSInvoice(SalesInvoice):
 		self.validate_stock_availablility()
 		self.validate_return_items_qty()
 		self.set_status()
-		self.set_account_for_mode_of_payment()
 		self.validate_pos()
 		self.validate_payment_amount()
 		self.validate_loyalty_transaction()
+		self.validate_company_with_pos_company()
+		self.validate_duplicate_serial_no()
 		if self.coupon_code:
 			from erpnext.accounts.doctype.pricing_rule.utils import validate_coupon_code
 
@@ -153,6 +156,18 @@ class POSInvoice(SalesInvoice):
 				title=_("Item Unavailable"),
 			)
 
+	def validate_duplicate_serial_no(self):
+		serial_nos = []
+
+		for row in self.get("items"):
+			if row.serial_no:
+				serial_nos = row.serial_no.split("\n")
+
+		if serial_nos:
+			for key, value in collections.Counter(serial_nos).items():
+				if value > 1:
+					frappe.throw(_("Duplicate Serial No {0} found").format("key"))
+
 	def validate_pos_reserved_batch_qty(self, item):
 		filters = {"item_code": item.item_code, "warehouse": item.warehouse, "batch_no": item.batch_no}
 
@@ -161,7 +176,7 @@ class POSInvoice(SalesInvoice):
 
 		bold_item_name = frappe.bold(item.item_name)
 		bold_extra_batch_qty_needed = frappe.bold(
-			abs(available_batch_qty - reserved_batch_qty - item.qty)
+			abs(available_batch_qty - reserved_batch_qty - item.stock_qty)
 		)
 		bold_invalid_batch_no = frappe.bold(item.batch_no)
 
@@ -172,7 +187,7 @@ class POSInvoice(SalesInvoice):
 				).format(item.idx, bold_invalid_batch_no, bold_item_name),
 				title=_("Item Unavailable"),
 			)
-		elif (available_batch_qty - reserved_batch_qty - item.qty) < 0:
+		elif (available_batch_qty - reserved_batch_qty - item.stock_qty) < 0:
 			frappe.throw(
 				_(
 					"Row #{}: Batch No. {} of item {} has less than required stock available, {} more required"
@@ -246,7 +261,7 @@ class POSInvoice(SalesInvoice):
 						),
 						title=_("Item Unavailable"),
 					)
-				elif is_stock_item and flt(available_stock) < flt(d.qty):
+				elif is_stock_item and flt(available_stock) < flt(d.stock_qty):
 					frappe.throw(
 						_(
 							"Row #{}: Stock quantity not enough for Item Code: {} under warehouse {}. Available quantity {}."
@@ -369,6 +384,14 @@ class POSInvoice(SalesInvoice):
 			if total_amount_in_payments and total_amount_in_payments < invoice_total:
 				frappe.throw(_("Total payments amount can't be greater than {}").format(-invoice_total))
 
+	def validate_company_with_pos_company(self):
+		if self.company != frappe.db.get_value("POS Profile", self.pos_profile, "company"):
+			frappe.throw(
+				_("Company {} does not match with POS Profile Company {}").format(
+					self.company, frappe.db.get_value("POS Profile", self.pos_profile, "company")
+				)
+			)
+
 	def validate_loyalty_transaction(self):
 		if self.redeem_loyalty_points and (
 			not self.loyalty_redemption_account or not self.loyalty_redemption_cost_center
@@ -447,6 +470,7 @@ class POSInvoice(SalesInvoice):
 		profile = {}
 		if self.pos_profile:
 			profile = frappe.get_doc("POS Profile", self.pos_profile)
+			self.company = profile.get("company")
 
 		if not self.get("payments") and not for_validate:
 			update_multi_mode_option(self, profile)
@@ -492,7 +516,7 @@ class POSInvoice(SalesInvoice):
 				selling_price_list = (
 					customer_price_list or customer_group_price_list or profile.get("selling_price_list")
 				)
-				if customer_currency != profile.get("currency"):
+				if customer_currency and customer_currency != profile.get("currency"):
 					self.set("currency", customer_currency)
 
 			else:
@@ -557,11 +581,6 @@ class POSInvoice(SalesInvoice):
 			pos_profile = frappe.get_cached_doc("POS Profile", self.pos_profile)
 			update_multi_mode_option(self, pos_profile)
 			self.paid_amount = 0
-
-	def set_account_for_mode_of_payment(self):
-		for pay in self.payments:
-			if not pay.account:
-				pay.account = get_bank_cash_account(pay.mode_of_payment, self.company).get("account")
 
 	@frappe.whitelist()
 	def create_payment_request(self):
@@ -633,7 +652,7 @@ def get_stock_availability(item_code, warehouse):
 		return bin_qty - pos_sales_qty, is_stock_item
 	else:
 		is_stock_item = True
-		if frappe.db.exists("Product Bundle", item_code):
+		if frappe.db.exists("Product Bundle", {"name": item_code, "disabled": 0}):
 			return get_bundle_availability(item_code, warehouse), is_stock_item
 		else:
 			is_stock_item = False
@@ -673,20 +692,24 @@ def get_bin_qty(item_code, warehouse):
 
 
 def get_pos_reserved_qty(item_code, warehouse):
-	reserved_qty = frappe.db.sql(
-		"""select sum(p_item.qty) as qty
-		from `tabPOS Invoice` p, `tabPOS Invoice Item` p_item
-		where p.name = p_item.parent
-		and ifnull(p.consolidated_invoice, '') = ''
-		and p_item.docstatus = 1
-		and p_item.item_code = %s
-		and p_item.warehouse = %s
-		""",
-		(item_code, warehouse),
-		as_dict=1,
-	)
+	p_inv = frappe.qb.DocType("POS Invoice")
+	p_item = frappe.qb.DocType("POS Invoice Item")
 
-	return reserved_qty[0].qty or 0 if reserved_qty else 0
+	reserved_qty = (
+		frappe.qb.from_(p_inv)
+		.from_(p_item)
+		.select(Sum(p_item.stock_qty).as_("stock_qty"))
+		.where(
+			(p_inv.name == p_item.parent)
+			& (IfNull(p_inv.consolidated_invoice, "") == "")
+			& (p_inv.is_return == 0)
+			& (p_item.docstatus == 1)
+			& (p_item.item_code == item_code)
+			& (p_item.warehouse == warehouse)
+		)
+	).run(as_dict=True)
+
+	return flt(reserved_qty[0].stock_qty) if reserved_qty else 0
 
 
 @frappe.whitelist()
