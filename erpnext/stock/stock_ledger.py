@@ -1196,7 +1196,11 @@ def get_previous_sle_of_current_voucher(args, operator="<", exclude_current_vouc
 		order by posting_datetime desc, creation desc
 		limit 1
 		for update""",
-		args,
+		{
+			"item_code": args.get("item_code"),
+			"warehouse": args.get("warehouse"),
+			"posting_datetime": args.get("posting_datetime"),
+		},
 		as_dict=1,
 	)
 
@@ -1490,6 +1494,10 @@ def get_stock_reco_qty_shift(args):
 			stock_reco_qty_shift = flt(args.qty_after_transaction) - flt(last_balance)
 		else:
 			stock_reco_qty_shift = flt(args.actual_qty)
+
+	elif args.get("serial_no") or args.get("batch_no"):
+		stock_reco_qty_shift = flt(args.actual_qty)
+
 	else:
 		# reco is being submitted
 		last_balance = get_previous_sle_of_current_voucher(args, "<=", exclude_current_voucher=True).get(
@@ -1559,6 +1567,15 @@ def get_datetime_limit_condition(detail):
 def validate_negative_qty_in_future_sle(args, allow_negative_stock=False):
 	if allow_negative_stock or is_negative_stock_allowed(item_code=args.item_code):
 		return
+
+	if (
+		args.voucher_type == "Stock Reconciliation"
+		and args.actual_qty < 0
+		and args.get("batch_no")
+		and frappe.db.get_value("Stock Reconciliation Item", args.voucher_detail_no, "qty") > 0
+	):
+		return
+
 	if not (args.actual_qty < 0 or args.voucher_type == "Stock Reconciliation"):
 		return
 

@@ -55,6 +55,9 @@ GL_REPOSTING_CHUNK = 100
 def get_fiscal_year(
 	date=None, fiscal_year=None, label="Date", verbose=1, company=None, as_dict=False, boolean=False
 ):
+	if isinstance(boolean, str):
+		boolean = loads(boolean)
+
 	fiscal_years = get_fiscal_years(
 		date, fiscal_year, label, verbose, company, as_dict=as_dict, boolean=boolean
 	)
@@ -479,6 +482,11 @@ def reconcile_against_document(
 		# re-submit advance entry
 		doc = frappe.get_doc(entry.voucher_type, entry.voucher_no)
 		gl_map = doc.build_gl_map()
+		from erpnext.accounts.general_ledger import process_debit_credit_difference
+
+		# Make sure there is no overallocation
+		process_debit_credit_difference(gl_map)
+
 		create_payment_ledger_entry(gl_map, update_outstanding="No", cancel=0, adv_adj=1)
 
 		# Only update outstanding for newly linked vouchers
