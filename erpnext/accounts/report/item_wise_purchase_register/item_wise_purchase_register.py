@@ -306,7 +306,7 @@ def apply_conditions(query, pi, pii, filters):
 		query = query.orderby(pi.posting_date, order=Order.desc)
 		query = query.orderby(pii.item_group, order=Order.desc)
 	else:
-		query = apply_group_by_conditions(filters, "Purchase Invoice")
+		query = apply_group_by_conditions(query, pi, pii, filters)
 
 	return query
 
@@ -322,7 +322,7 @@ def get_items(filters, additional_table_columns):
 		.left_join(Item)
 		.on(pii.item_code == Item.name)
 		.select(
-			pii.name.as_("pii_name"),
+			pii.name,
 			pii.parent,
 			pi.posting_date,
 			pi.credit_to,
