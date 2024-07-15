@@ -269,7 +269,13 @@ class SalesOrder(SellingController):
 			update_coupon_code_count(self.coupon_code, "used")
 
 	def on_cancel(self):
-		self.ignore_linked_doctypes = ("GL Entry", "Stock Ledger Entry", "Payment Ledger Entry")
+		self.ignore_linked_doctypes = (
+			"GL Entry",
+			"Stock Ledger Entry",
+			"Payment Ledger Entry",
+			"Unreconcile Payment",
+			"Unreconcile Payment Entries",
+		)
 		super().on_cancel()
 
 		# Cannot cancel closed SO
@@ -337,6 +343,10 @@ class SalesOrder(SellingController):
 	def update_status(self, status):
 		self.check_modified_date()
 		self.set_status(update=True, status=status)
+		# Upon Sales Order Re-open, check for credit limit.
+		# Limit should be checked after the 'Hold/Closed' status is reset.
+		if status == "Draft" and self.docstatus == 1:
+			self.check_credit_limit()
 		self.update_reserved_qty()
 		self.notify_update()
 		clear_doctype_notifications(self)
