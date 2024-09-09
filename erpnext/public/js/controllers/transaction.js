@@ -472,6 +472,8 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 							quotation_to: me.frm.doc.quotation_to,
 							supplier: me.frm.doc.supplier,
 							currency: me.frm.doc.currency,
+							is_internal_supplier: me.frm.doc.is_internal_supplier,
+							is_internal_customer: me.frm.doc.is_internal_customer,
 							update_stock: update_stock,
 							conversion_rate: me.frm.doc.conversion_rate,
 							price_list: me.frm.doc.selling_price_list || me.frm.doc.buying_price_list,
@@ -1137,6 +1139,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			"Sales Invoice Item": ["dn_detail", "so_detail", "sales_invoice_item"],
 			"Purchase Receipt Item": ["purchase_order_item", "purchase_invoice_item", "purchase_receipt_item"],
 			"Purchase Invoice Item": ["purchase_order_item", "pr_detail", "po_detail"],
+			"Sales Order Item": ["prevdoc_docname", "quotation_item"],
 		};
 		const mappped_fields = mapped_item_field_map[item.doctype] || [];
 
@@ -1489,7 +1492,9 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			"update_stock": ['Sales Invoice', 'Purchase Invoice'].includes(me.frm.doc.doctype) ? cint(me.frm.doc.update_stock) : 0,
 			"conversion_factor": me.frm.doc.conversion_factor,
 			"pos_profile": me.frm.doc.doctype == 'Sales Invoice' ? me.frm.doc.pos_profile : '',
-			"coupon_code": me.frm.doc.coupon_code
+			"coupon_code": me.frm.doc.coupon_code,
+			"is_internal_supplier": me.frm.doc.is_internal_supplier,
+			"is_internal_customer": me.frm.doc.is_internal_customer,
 		};
 	}
 
@@ -1645,6 +1650,12 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 	apply_price_list(item, reset_plc_conversion) {
 		// We need to reset plc_conversion_rate sometimes because the call to
 		// `erpnext.stock.get_item_details.apply_price_list` is sensitive to its value
+
+
+		if (this.frm.doc.doctype === "Material Request") {
+			return;
+		}
+
 		if (!reset_plc_conversion) {
 			this.frm.set_value("plc_conversion_rate", "");
 		}
@@ -1660,7 +1671,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		me.in_apply_price_list = true;
 		return this.frm.call({
 			method: "erpnext.stock.get_item_details.apply_price_list",
-			args: {	args: args },
+			args: {	args: args, doc: me.frm.doc },
 			callback: function(r) {
 				if (!r.exc) {
 					frappe.run_serially([
@@ -1805,6 +1816,8 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		let item_codes = [];
 		let item_rates = {};
 		let item_tax_templates = {};
+
+		if (me.frm.doc.is_return && me.frm.doc.return_against) return;
 
 		$.each(this.frm.doc.items || [], function(i, item) {
 			if (item.item_code) {
