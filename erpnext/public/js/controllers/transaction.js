@@ -472,6 +472,8 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 							quotation_to: me.frm.doc.quotation_to,
 							supplier: me.frm.doc.supplier,
 							currency: me.frm.doc.currency,
+							is_internal_supplier: me.frm.doc.is_internal_supplier,
+							is_internal_customer: me.frm.doc.is_internal_customer,
 							update_stock: update_stock,
 							conversion_rate: me.frm.doc.conversion_rate,
 							price_list: me.frm.doc.selling_price_list || me.frm.doc.buying_price_list,
@@ -1137,6 +1139,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			"Sales Invoice Item": ["dn_detail", "so_detail", "sales_invoice_item"],
 			"Purchase Receipt Item": ["purchase_order_item", "purchase_invoice_item", "purchase_receipt_item"],
 			"Purchase Invoice Item": ["purchase_order_item", "pr_detail", "po_detail"],
+			"Sales Order Item": ["prevdoc_docname", "quotation_item"],
 		};
 		const mappped_fields = mapped_item_field_map[item.doctype] || [];
 
@@ -1489,7 +1492,9 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			"update_stock": ['Sales Invoice', 'Purchase Invoice'].includes(me.frm.doc.doctype) ? cint(me.frm.doc.update_stock) : 0,
 			"conversion_factor": me.frm.doc.conversion_factor,
 			"pos_profile": me.frm.doc.doctype == 'Sales Invoice' ? me.frm.doc.pos_profile : '',
-			"coupon_code": me.frm.doc.coupon_code
+			"coupon_code": me.frm.doc.coupon_code,
+			"is_internal_supplier": me.frm.doc.is_internal_supplier,
+			"is_internal_customer": me.frm.doc.is_internal_customer,
 		};
 	}
 
@@ -1811,6 +1816,8 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		let item_codes = [];
 		let item_rates = {};
 		let item_tax_templates = {};
+
+		if (me.frm.doc.is_return && me.frm.doc.return_against) return;
 
 		$.each(this.frm.doc.items || [], function(i, item) {
 			if (item.item_code) {
