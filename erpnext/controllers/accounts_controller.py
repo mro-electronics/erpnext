@@ -357,12 +357,15 @@ class AccountsController(TransactionBase):
 	def validate_return_against_account(self):
 		if self.doctype in ["Sales Invoice", "Purchase Invoice"] and self.is_return and self.return_against:
 			cr_dr_account_field = "debit_to" if self.doctype == "Sales Invoice" else "credit_to"
-			cr_dr_account_label = "Debit To" if self.doctype == "Sales Invoice" else "Credit To"
-			cr_dr_account = self.get(cr_dr_account_field)
-			if frappe.get_value(self.doctype, self.return_against, cr_dr_account_field) != cr_dr_account:
+			original_account = frappe.get_value(self.doctype, self.return_against, cr_dr_account_field)
+			if original_account != self.get(cr_dr_account_field):
 				frappe.throw(
-					_("'{0}' account: '{1}' should match the Return Against Invoice").format(
-						frappe.bold(cr_dr_account_label), frappe.bold(cr_dr_account)
+					_(
+						"Please set {0} to {1}, the same account that was used in the original invoice {2}."
+					).format(
+						frappe.bold(_(self.meta.get_label(cr_dr_account_field), context=self.doctype)),
+						frappe.bold(original_account),
+						frappe.bold(self.return_against),
 					)
 				)
 
@@ -412,6 +415,11 @@ class AccountsController(TransactionBase):
 					)
 
 	def validate_invoice_documents_schedule(self):
+		if self.is_return:
+			self.payment_terms_template = ""
+			self.payment_schedule = []
+			return
+
 		self.validate_payment_schedule_dates()
 		self.set_due_date()
 		self.set_payment_schedule()
@@ -426,7 +434,7 @@ class AccountsController(TransactionBase):
 		self.validate_payment_schedule_amount()
 
 	def validate_all_documents_schedule(self):
-		if self.doctype in ("Sales Invoice", "Purchase Invoice") and not self.is_return:
+		if self.doctype in ("Sales Invoice", "Purchase Invoice"):
 			self.validate_invoice_documents_schedule()
 		elif self.doctype in ("Quotation", "Purchase Order", "Sales Order"):
 			self.validate_non_invoice_documents_schedule()
@@ -1844,7 +1852,7 @@ class AccountsController(TransactionBase):
 					).format(formatted_advance_paid, self.name, formatted_order_total)
 				)
 
-			frappe.db.set_value(self.doctype, self.name, "advance_paid", advance_paid)
+			self.db_set("advance_paid", advance_paid)
 
 	@property
 	def company_abbr(self):
@@ -3124,7 +3132,6 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 	items_added_or_removed = False  # updated to true if any new item is added or removed
 	any_conversion_factor_changed = False
 
-	sales_doctypes = ["Sales Order", "Sales Invoice", "Delivery Note", "Quotation"]
 	parent = frappe.get_doc(parent_doctype, parent_doctype_name)
 
 	check_doc_permissions(parent, "write")
@@ -3226,25 +3233,21 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 				#  if rate is greater than price_list_rate, set margin
 				#  or set discount
 				child_item.discount_percentage = 0
-
-				if parent_doctype in sales_doctypes:
-					child_item.margin_type = "Amount"
-					child_item.margin_rate_or_amount = flt(
-						child_item.rate - child_item.price_list_rate,
-						child_item.precision("margin_rate_or_amount"),
-					)
-					child_item.rate_with_margin = child_item.rate
+				child_item.margin_type = "Amount"
+				child_item.margin_rate_or_amount = flt(
+					child_item.rate - child_item.price_list_rate,
+					child_item.precision("margin_rate_or_amount"),
+				)
+				child_item.rate_with_margin = child_item.rate
 			else:
 				child_item.discount_percentage = flt(
 					(1 - flt(child_item.rate) / flt(child_item.price_list_rate)) * 100.0,
 					child_item.precision("discount_percentage"),
 				)
 				child_item.discount_amount = flt(child_item.price_list_rate) - flt(child_item.rate)
-
-				if parent_doctype in sales_doctypes:
-					child_item.margin_type = ""
-					child_item.margin_rate_or_amount = 0
-					child_item.rate_with_margin = 0
+				child_item.margin_type = ""
+				child_item.margin_rate_or_amount = 0
+				child_item.rate_with_margin = 0
 
 		child_item.flags.ignore_validate_update_after_submit = True
 		if new_child_flag:
@@ -3309,6 +3312,9 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 	parent.update_blanket_order()
 	parent.update_billing_percentage()
 	parent.set_status()
+
+	parent.validate_uom_is_integer("uom", "qty")
+	parent.validate_uom_is_integer("stock_uom", "stock_qty")
 
 
 def check_if_child_table_updated(child_table_before_update, child_table_after_update, fields_to_check):
