@@ -15,6 +15,10 @@ frappe.ui.form.on('Payment Entry', {
 		}
 
 		erpnext.accounts.dimensions.setup_dimension_filters(frm, frm.doctype);
+
+		if (frm.is_new()) {
+			set_default_party_type(frm);
+		}
 	},
 
 	setup: function(frm) {
@@ -320,6 +324,7 @@ frappe.ui.form.on('Payment Entry', {
 	},
 
 	payment_type: function(frm) {
+		set_default_party_type(frm);
 		if(frm.doc.payment_type == "Internal Transfer") {
 			$.each(["party", "party_balance", "paid_from", "paid_to",
 				"references", "total_allocated_amount"], function(i, field) {
@@ -1511,3 +1516,16 @@ frappe.ui.form.on('Payment Entry Deduction', {
 		frm.events.set_unallocated_amount(frm);
 	},
 });
+
+function set_default_party_type(frm) {
+	if (frm.doc.party) return;
+
+	let party_type;
+	if (frm.doc.payment_type == "Receive") {
+		party_type = "Customer";
+	} else if (frm.doc.payment_type == "Pay") {
+		party_type = "Supplier";
+	}
+
+	if (party_type) frm.set_value("party_type", party_type);
+}

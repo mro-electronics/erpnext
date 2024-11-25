@@ -1104,6 +1104,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				callback: function(r) {
 					if(!r.exc) {
 						frappe.model.set_value(cdt, cdn, 'conversion_factor', r.message.conversion_factor);
+						me.apply_price_list(item, true);
 					}
 				}
 			});
