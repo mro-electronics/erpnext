@@ -970,6 +970,11 @@ class Item(Document):
 		changed_fields = [
 			field for field in restricted_fields if cstr(self.get(field)) != cstr(values.get(field))
 		]
+
+		# Allow to change valuation method from FIFO to Moving Average not vice versa
+		if self.valuation_method == "Moving Average" and "valuation_method" in changed_fields:
+			changed_fields.remove("valuation_method")
+
 		if not changed_fields:
 			return
 
@@ -1196,7 +1201,7 @@ def get_last_purchase_details(item_code, doc_name=None, conversion_rate=1.0):
 	return out
 
 
-def get_purchase_voucher_details(doctype, item_code, document_name):
+def get_purchase_voucher_details(doctype, item_code, document_name=None):
 	parent_doc = frappe.qb.DocType(doctype)
 	child_doc = frappe.qb.DocType(doctype + " Item")
 
@@ -1215,8 +1220,10 @@ def get_purchase_voucher_details(doctype, item_code, document_name):
 		)
 		.where(parent_doc.docstatus == 1)
 		.where(child_doc.item_code == item_code)
-		.where(parent_doc.name != document_name)
 	)
+
+	if document_name:
+		query = query.where(parent_doc.name != document_name)
 
 	if doctype in ("Purchase Receipt", "Purchase Invoice"):
 		query = query.select(parent_doc.posting_date, parent_doc.posting_time)

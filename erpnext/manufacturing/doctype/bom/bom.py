@@ -440,12 +440,12 @@ class BOM(WebsiteGenerator):
 			"description": item and args["description"] or "",
 			"image": item and args["image"] or "",
 			"stock_uom": item and args["stock_uom"] or "",
-			"uom": item and args["stock_uom"] or "",
-			"conversion_factor": 1,
+			"uom": args["uom"] if args.get("uom") else item and args["stock_uom"] or "",
+			"conversion_factor": args["conversion_factor"] if args.get("conversion_factor") else 1,
 			"bom_no": args["bom_no"],
 			"rate": rate,
 			"qty": args.get("qty") or args.get("stock_qty") or 1,
-			"stock_qty": args.get("qty") or args.get("stock_qty") or 1,
+			"stock_qty": args.get("stock_qty") or args.get("qty") or 1,
 			"base_rate": flt(rate) * (flt(self.conversion_rate) or 1),
 			"include_item_in_manufacturing": cint(args.get("transfer_for_manufacture")),
 			"sourced_by_supplier": args.get("sourced_by_supplier", 0),
@@ -1496,11 +1496,8 @@ def item_query(doctype, txt, searchfield, start, page_len, filters):
 	fields = ["name", "item_name", "item_group", "description"]
 	fields.extend([field for field in searchfields if field not in ["name", "item_group", "description"]])
 
-	searchfields = searchfields + [
-		field
-		for field in [searchfield or "name", "item_code", "item_group", "item_name"]
-		if field not in searchfields
-	]
+	if not searchfields:
+		searchfields = ["name"]
 
 	query_filters = {"disabled": 0, "ifnull(end_of_life, '3099-12-31')": (">", today())}
 

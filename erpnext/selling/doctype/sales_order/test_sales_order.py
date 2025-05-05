@@ -2136,7 +2136,7 @@ class TestSalesOrder(AccountsTestMixin, FrappeTestCase):
 
 		self.assertEqual(dn.items[0].rate, 90)
 
-	def test_credit_limit_on_so_reopning(self):
+	def test_credit_limit_on_so_reopening(self):
 		# set credit limit
 		company = "_Test Company"
 		customer = frappe.get_doc("Customer", self.customer)
@@ -2148,15 +2148,49 @@ class TestSalesOrder(AccountsTestMixin, FrappeTestCase):
 
 		so1 = make_sales_order(qty=9, rate=100, do_not_submit=True)
 		so1.customer = self.customer
+		so1.customer_address = so1.shipping_address_name = None
 		so1.save().submit()
 
 		so1.update_status("Closed")
 
 		so2 = make_sales_order(qty=9, rate=100, do_not_submit=True)
 		so2.customer = self.customer
+		so2.customer_address = so2.shipping_address_name = None
 		so2.save().submit()
 
 		self.assertRaises(frappe.ValidationError, so1.update_status, "Draft")
+
+	def test_item_tax_transfer_from_sales_to_purchase(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_purchase_order
+
+		item_tax = frappe.new_doc("Item Tax Template")
+		item_tax.title = "Test Item Tax Template"
+		item_tax.company = "_Test Company"
+		item_tax.append("taxes", {"tax_type": "_Test Account Service Tax - _TC", "tax_rate": 2})
+		item_tax.save()
+
+		item_group = frappe.get_doc("Item Group", "_Test Item Group")
+		item_group.append("taxes", {"item_tax_template": "Test Item Tax Template - _TC"})
+		item_group.save()
+
+		so = make_sales_order(item_code="_Test Item", qty=1, do_not_submit=1)
+		so.append(
+			"taxes",
+			{
+				"account_head": "_Test Account Service Tax - _TC",
+				"charge_type": "On Net Total",
+				"description": "TDS",
+				"doctype": "Sales Taxes and Charges",
+				"rate": 2,
+			},
+		)
+		so.submit()
+
+		po = make_purchase_order(so.name, selected_items=so.items)
+		po.supplier = "_Test Supplier"
+		po.items[0].rate = 100
+		po.submit()
+		self.assertEqual(po.taxes[0].tax_amount, 2)
 
 
 def automatically_fetch_payment_terms(enable=1):

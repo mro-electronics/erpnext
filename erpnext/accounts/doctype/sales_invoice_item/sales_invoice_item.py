@@ -40,6 +40,7 @@ class SalesInvoiceItem(Document):
 		discount_account: DF.Link | None
 		discount_amount: DF.Currency
 		discount_percentage: DF.Percent
+		distributed_discount_amount: DF.Currency
 		dn_detail: DF.Data | None
 		enable_deferred_revenue: DF.Check
 		expense_account: DF.Link | None
@@ -64,6 +65,8 @@ class SalesInvoiceItem(Document):
 		parent: DF.Data
 		parentfield: DF.Data
 		parenttype: DF.Data
+		pos_invoice: DF.Link | None
+		pos_invoice_item: DF.Data | None
 		price_list_rate: DF.Currency
 		pricing_rules: DF.SmallText | None
 		project: DF.Link | None

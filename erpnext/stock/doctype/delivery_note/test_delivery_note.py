@@ -10,6 +10,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, cstr, flt, getdate, nowdate, nowtime, today
 
 from erpnext.accounts.doctype.account.test_account import get_inventory_account
+from erpnext.accounts.doctype.cost_center.test_cost_center import create_cost_center
 from erpnext.accounts.utils import get_balance_on
 from erpnext.selling.doctype.product_bundle.test_product_bundle import make_product_bundle
 from erpnext.selling.doctype.sales_order.test_sales_order import (
@@ -1400,6 +1401,7 @@ class TestDeliveryNote(FrappeTestCase):
 		warehouse = "Stores - TCP1"
 		target = "Finished Goods - TCP1"
 		customer = create_internal_customer(represents_company=company)
+		create_cost_center(cost_center_name="_Test Cost Center", company=company)
 
 		# average rate = 128.015
 		rates = [101.45, 150.46, 138.25, 121.9]
@@ -1414,6 +1416,7 @@ class TestDeliveryNote(FrappeTestCase):
 			qty=4,
 			warehouse=warehouse,
 			target_warehouse=target,
+			cost_center="_Test Cost Center - TCP1",
 		)
 		self.assertFalse(frappe.db.exists("GL Entry", {"voucher_no": dn.name, "voucher_type": dn.doctype}))
 
@@ -2517,6 +2520,28 @@ class TestDeliveryNote(FrappeTestCase):
 
 			for d in bundle_data:
 				self.assertEqual(d.incoming_rate, batch_no_valuation[d.batch_no])
+
+	def test_delivery_note_per_billed_after_return(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+
+		so = make_sales_order(qty=2)
+		dn = make_delivery_note(so.name)
+		dn.submit()
+		self.assertEqual(dn.per_billed, 0)
+
+		si = make_sales_invoice(dn.name)
+		si.location = "Test Location"
+		si.submit()
+
+		dn_return = create_delivery_note(is_return=1, return_against=dn.name, qty=-2, do_not_submit=True)
+		dn_return.items[0].dn_detail = dn.items[0].name
+		dn_return.submit()
+
+		returned = frappe.get_doc("Delivery Note", dn_return.name)
+		returned.update_prevdoc_status()
+		dn.load_from_db()
+		self.assertEqual(dn.per_billed, 100)
+		self.assertEqual(dn.per_returned, 100)
 
 
 def create_delivery_note(**args):
