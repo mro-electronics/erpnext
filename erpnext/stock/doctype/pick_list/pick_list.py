@@ -686,18 +686,14 @@ def get_available_item_locations(
 		locations = get_available_item_locations_for_batched_item(
 			item_code,
 			from_warehouses,
-			required_qty,
 			company,
-			total_picked_qty,
 			consider_rejected_warehouses=consider_rejected_warehouses,
 		)
 	else:
 		locations = get_available_item_locations_for_other_item(
 			item_code,
 			from_warehouses,
-			required_qty,
 			company,
-			total_picked_qty,
 			consider_rejected_warehouses=consider_rejected_warehouses,
 		)
 
@@ -790,9 +786,7 @@ def get_available_item_locations_for_serialized_item(
 def get_available_item_locations_for_batched_item(
 	item_code,
 	from_warehouses,
-	required_qty,
 	company,
-	total_picked_qty=0,
 	consider_rejected_warehouses=False,
 ):
 	sle = frappe.qb.DocType("Stock Ledger Entry")
@@ -813,7 +807,6 @@ def get_available_item_locations_for_batched_item(
 		.groupby(sle.warehouse, sle.batch_no, sle.item_code)
 		.having(Sum(sle.actual_qty) > 0)
 		.orderby(IfNull(batch.expiry_date, "2200-01-01"), batch.creation, sle.batch_no, sle.warehouse)
-		.limit(ceil(required_qty + total_picked_qty))
 	)
 
 	if from_warehouses:
@@ -838,7 +831,6 @@ def get_available_item_locations_for_serial_and_batched_item(
 	locations = get_available_item_locations_for_batched_item(
 		item_code,
 		from_warehouses,
-		required_qty,
 		company,
 		consider_rejected_warehouses=consider_rejected_warehouses,
 	)
@@ -872,9 +864,7 @@ def get_available_item_locations_for_serial_and_batched_item(
 def get_available_item_locations_for_other_item(
 	item_code,
 	from_warehouses,
-	required_qty,
 	company,
-	total_picked_qty=0,
 	consider_rejected_warehouses=False,
 ):
 	bin = frappe.qb.DocType("Bin")
@@ -883,7 +873,6 @@ def get_available_item_locations_for_other_item(
 		.select(bin.warehouse, bin.actual_qty.as_("qty"))
 		.where((bin.item_code == item_code) & (bin.actual_qty > 0))
 		.orderby(bin.creation)
-		.limit(ceil(required_qty + total_picked_qty))
 	)
 
 	if from_warehouses:
