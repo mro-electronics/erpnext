@@ -28,11 +28,10 @@ class POSInvoiceMergeLog(Document):
 	if TYPE_CHECKING:
 		from frappe.types import DF
 
-		from erpnext.accounts.doctype.pos_invoice_reference.pos_invoice_reference import (
-			POSInvoiceReference,
-		)
+		from erpnext.accounts.doctype.pos_invoice_reference.pos_invoice_reference import POSInvoiceReference
 
 		amended_from: DF.Link | None
+		company: DF.Link
 		consolidated_credit_note: DF.Link | None
 		consolidated_invoice: DF.Link | None
 		customer: DF.Link
@@ -258,6 +257,7 @@ class POSInvoiceMergeLog(Document):
 				if not found:
 					tax.charge_type = "Actual"
 					tax.idx = idx
+					tax.row_id = None
 					idx += 1
 					tax.included_in_print_rate = 0
 					tax.tax_amount = tax.tax_amount_after_discount_amount
@@ -336,6 +336,11 @@ class POSInvoiceMergeLog(Document):
 		if self.merge_invoices_based_on == "Customer Group":
 			invoice.flags.ignore_pos_profile = True
 			invoice.pos_profile = ""
+
+		# Unset Commission Section
+		invoice.set("sales_partner", None)
+		invoice.set("commission_rate", 0)
+		invoice.set("total_commission", 0)
 
 		return invoice
 
@@ -583,6 +588,7 @@ def create_merge_logs(invoice_by_customer, closing_entry=None):
 					merge_log.posting_time = (
 						get_time(closing_entry.get("posting_time")) if closing_entry else nowtime()
 					)
+					merge_log.company = closing_entry.get("company") if closing_entry else None
 					merge_log.customer = customer
 					merge_log.pos_closing_entry = closing_entry.get("name") if closing_entry else None
 					merge_log.set("pos_invoices", _invoices)
@@ -691,6 +697,7 @@ def get_sales_invoice_item(return_against_pos_invoice, pos_invoice_item):
 				& (SalesInvoice.is_return == 0)
 				& (SalesInvoiceItem.pos_invoice == return_against_pos_invoice)
 				& (SalesInvoiceItem.pos_invoice_item == pos_invoice_item)
+				& (SalesInvoice.docstatus == 1)
 			)
 		)
 
