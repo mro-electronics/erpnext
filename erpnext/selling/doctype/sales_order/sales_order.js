@@ -23,7 +23,16 @@ frappe.ui.form.on("Sales Order", {
 
 		// formatter for material request item
 		frm.set_indicator_formatter("item_code", function (doc) {
-			return doc.stock_qty <= doc.delivered_qty ? "green" : "orange";
+			let color;
+			if (!doc.qty && frm.doc.has_unit_price_items) {
+				color = "yellow";
+			} else if (doc.stock_qty <= doc.delivered_qty) {
+				color = "green";
+			} else {
+				color = "orange";
+			}
+
+			return color;
 		});
 
 		frm.set_query("bom_no", "items", function (doc, cdt, cdn) {
@@ -31,6 +40,15 @@ frappe.ui.form.on("Sales Order", {
 			return {
 				filters: {
 					item: row.item_code,
+				},
+			};
+		});
+
+		frm.set_query("sales_person", "sales_team", function () {
+			return {
+				filters: {
+					is_group: 0,
+					enabled: 1,
 				},
 			};
 		});
@@ -97,6 +115,8 @@ frappe.ui.form.on("Sales Order", {
 		}
 
 		if (frm.doc.docstatus === 0) {
+			erpnext.set_unit_price_items_note(frm);
+
 			if (frm.doc.is_internal_customer) {
 				frm.events.get_items_from_internal_purchase_order(frm);
 			}
@@ -170,14 +190,20 @@ frappe.ui.form.on("Sales Order", {
 		}
 		erpnext.queries.setup_queries(frm, "Warehouse", function () {
 			return {
-				filters: [["Warehouse", "company", "in", ["", cstr(frm.doc.company)]]],
+				filters: [
+					["Warehouse", "company", "in", ["", cstr(frm.doc.company)]],
+					["Warehouse", "is_group", "=", 0],
+				],
 			};
 		});
 
 		frm.set_query("warehouse", "items", function (doc, cdt, cdn) {
 			let row = locals[cdt][cdn];
 			let query = {
-				filters: [["Warehouse", "company", "in", ["", cstr(frm.doc.company)]]],
+				filters: [
+					["Warehouse", "company", "in", ["", cstr(frm.doc.company)]],
+					["Warehouse", "is_group", "=", 0],
+				],
 			};
 			if (row.item_code) {
 				query.query = "erpnext.controllers.queries.warehouse_query";
@@ -548,6 +574,10 @@ frappe.ui.form.on("Sales Order Item", {
 });
 
 erpnext.selling.SalesOrderController = class SalesOrderController extends erpnext.selling.SellingController {
+	setup(doc) {
+		this.setup_accounting_dimension_triggers();
+		super.setup(doc);
+	}
 	onload(doc, dt, dn) {
 		super.onload(doc, dt, dn);
 	}
@@ -586,10 +616,12 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 			}
 			if (doc.status !== "Closed") {
 				if (doc.status !== "On Hold") {
+					const items_are_deliverable = this.frm.doc.items.some(
+						(item) => item.delivered_by_supplier === 0 && item.qty > flt(item.delivered_qty)
+					);
 					allow_delivery =
-						this.frm.doc.items.some(
-							(item) => item.delivered_by_supplier === 0 && item.qty > flt(item.delivered_qty)
-						) && !this.frm.doc.skip_delivery_note;
+						(this.frm.doc.has_unit_price_items || items_are_deliverable) &&
+						!this.frm.doc.skip_delivery_note;
 
 					if (this.frm.has_perm("submit")) {
 						if (flt(doc.per_delivered) < 100 || flt(doc.per_billed) < 100) {
@@ -719,8 +751,8 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 						if (internal) {
 							let button_label =
 								me.frm.doc.company === me.frm.doc.represents_company
-									? "Internal Purchase Order"
-									: "Inter Company Purchase Order";
+									? __("Internal Purchase Order")
+									: __("Inter Company Purchase Order");
 
 							me.frm.add_custom_button(
 								button_label,
@@ -774,6 +806,9 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 							docstatus: 1,
 							status: ["!=", "Lost"],
 						},
+						allow_child_item_selection: true,
+						child_fieldname: "items",
+						child_columns: ["item_code", "item_name", "qty", "rate", "amount"],
 					});
 
 					setTimeout(() => {
@@ -865,8 +900,8 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 						fields: fields,
 						primary_action: function () {
 							var data = { items: d.fields_dict.items.grid.get_selected_children() };
-							if (!data) {
-								frappe.throw(__("Please select items"));
+							if (!data.items.length) {
+								frappe.throw(__("Please select atleast one item to continue"));
 							}
 							me.frm.call({
 								method: "make_work_orders",
@@ -1016,7 +1051,7 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 						items: data,
 						company: me.frm.doc.company,
 						sales_order: me.frm.docname,
-						project: me.frm.project,
+						project: me.frm.doc.project,
 					},
 					freeze: true,
 					callback: function (r) {
@@ -1148,7 +1183,7 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 
 	make_purchase_order() {
 		let pending_items = this.frm.doc.items.some((item) => {
-			let pending_qty = flt(item.stock_qty) - flt(item.ordered_qty);
+			const pending_qty = flt(item.stock_qty) - this.get_ordered_qty(item, this.frm.doc);
 			return pending_qty > 0;
 		});
 		if (!pending_items) {
@@ -1200,6 +1235,7 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 							read_only: 1,
 							fieldname: "uom",
 							label: __("UOM"),
+							options: "UOM",
 							in_list_view: 1,
 						},
 						{
@@ -1273,7 +1309,6 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 					let pending_qty = (flt(d.stock_qty) - ordered_qty) / flt(d.conversion_factor);
 					if (pending_qty > 0) {
 						po_items.push({
-							doctype: "Sales Order Item",
 							name: d.name,
 							item_name: d.item_name,
 							item_code: d.item_code,
@@ -1302,8 +1337,10 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 			// calculate ordered qty based on packed items in case of product bundle
 			let packed_items = so.packed_items.filter((pi) => pi.parent_detail_docname == item.name);
 			if (packed_items && packed_items.length) {
-				ordered_qty = packed_items.reduce((sum, pi) => sum + flt(pi.ordered_qty), 0);
-				ordered_qty = ordered_qty / packed_items.length;
+				const all_packed_items_ordered = packed_items.every(
+					(pi) => flt(pi.ordered_qty) >= flt(pi.qty)
+				);
+				ordered_qty = all_packed_items_ordered ? item.stock_qty : 0;
 			}
 		}
 		return ordered_qty;

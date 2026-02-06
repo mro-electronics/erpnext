@@ -47,6 +47,7 @@
   "ignore_pricing_rule",
   "sec_warehouse",
   "scan_barcode",
+  "last_scanned_warehouse",
   "col_break_warehouse",
   "update_stock",
   "set_warehouse",
@@ -319,6 +320,7 @@
    "search_index": 1
   },
   {
+   "default": "Now",
    "fieldname": "posting_time",
    "fieldtype": "Time",
    "label": "Posting Time",
@@ -1643,6 +1645,13 @@
    "label": "Select Dispatch Address ",
    "options": "Address",
    "print_hide": 1
+  },
+  {
+   "depends_on": "eval: doc.last_scanned_warehouse",
+   "fieldname": "last_scanned_warehouse",
+   "fieldtype": "Data",
+   "is_virtual": 1,
+   "label": "Last Scanned Warehouse"
   }
  ],
  "grid_page_length": 50,
@@ -1650,7 +1659,7 @@
  "idx": 204,
  "is_submittable": 1,
  "links": [],
- "modified": "2025-04-09 16:49:22.175081",
+ "modified": "2025-08-04 19:19:11.380664",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Purchase Invoice",

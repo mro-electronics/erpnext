@@ -424,6 +424,8 @@ def get_party_account(party_type, party=None, company=None, include_advance=Fals
 	Will first search in party (Customer / Supplier) record, if not found,
 	will search in group (Customer Group / Supplier Group),
 	finally will return default."""
+	if not party_type:
+		frappe.throw(_("Party Type is mandatory"))
 	if not company:
 		frappe.throw(_("Please select a Company"))
 
@@ -459,6 +461,12 @@ def get_party_account(party_type, party=None, company=None, include_advance=Fals
 			account_currency = frappe.get_cached_value("Account", account, "account_currency")
 		if (account and account_currency != existing_gle_currency) or not account:
 			account = get_party_gle_account(party_type, party, company)
+
+	# get default account on the basis of party type
+	if not account:
+		account_type = frappe.get_cached_value("Party Type", party_type, "account_type")
+		default_account_name = "default_" + account_type.lower() + "_account"
+		account = frappe.get_cached_value("Company", company, default_account_name)
 
 	if include_advance and party_type in ["Customer", "Supplier", "Student"]:
 		advance_account = get_party_advance_account(party_type, party, company)
@@ -657,34 +665,34 @@ def get_due_date_from_template(template_name, posting_date, bill_date):
 	return due_date
 
 
-def validate_due_date(posting_date, due_date, bill_date=None, template_name=None):
+def validate_due_date(posting_date, due_date, bill_date=None, template_name=None, doctype=None):
 	if getdate(due_date) < getdate(posting_date):
 		frappe.throw(_("Due Date cannot be before Posting / Supplier Invoice Date"))
 	else:
-		if not template_name:
-			return
+		validate_due_date_with_template(posting_date, due_date, bill_date, template_name, doctype)
 
-		default_due_date = get_due_date_from_template(template_name, posting_date, bill_date).strftime(
-			"%Y-%m-%d"
-		)
 
-		if not default_due_date:
-			return
+def validate_due_date_with_template(posting_date, due_date, bill_date, template_name, doctype=None):
+	if not template_name:
+		return
 
-		if default_due_date != posting_date and getdate(due_date) > getdate(default_due_date):
-			is_credit_controller = (
-				frappe.db.get_single_value("Accounts Settings", "credit_controller") in frappe.get_roles()
+	default_due_date = format(get_due_date_from_template(template_name, posting_date, bill_date))
+
+	if not default_due_date:
+		return
+
+	if default_due_date != posting_date and getdate(due_date) > getdate(default_due_date):
+		if frappe.db.get_single_value("Accounts Settings", "credit_controller") in frappe.get_roles():
+			party_type = "supplier" if doctype == "Purchase Invoice" else "customer"
+
+			msgprint(
+				_("Note: Due Date exceeds allowed {0} credit days by {1} day(s)").format(
+					party_type, date_diff(due_date, default_due_date)
+				)
 			)
-			if is_credit_controller:
-				msgprint(
-					_("Note: Due / Reference Date exceeds allowed customer credit days by {0} day(s)").format(
-						date_diff(due_date, default_due_date)
-					)
-				)
-			else:
-				frappe.throw(
-					_("Due / Reference Date cannot be after {0}").format(formatdate(default_due_date))
-				)
+
+		else:
+			frappe.throw(_("Due / Reference Date cannot be after {0}").format(formatdate(default_due_date)))
 
 
 @frappe.whitelist()
@@ -931,12 +939,16 @@ def get_party_shipping_address(doctype: str, name: str) -> str | None:
 			["is_shipping_address", "=", 1],
 			["address_type", "=", "Shipping"],
 		],
-		pluck="name",
-		limit=1,
+		fields=["name", "is_shipping_address"],
 		order_by="is_shipping_address DESC",
 	)
 
-	return shipping_addresses[0] if shipping_addresses else None
+	if shipping_addresses and shipping_addresses[0].is_shipping_address == 1:
+		return shipping_addresses[0].name
+	if len(shipping_addresses) == 1:
+		return shipping_addresses[0].name
+	else:
+		return None
 
 
 def get_partywise_advanced_payment_amount(
@@ -1044,3 +1056,21 @@ def add_party_account(party_type, party, company, account):
 
 def render_address(address, check_permissions=True):
 	return frappe.call(_render_address, address, check_permissions=check_permissions)
+
+
+def validate_party_currency_before_merging(party_type, old_party, new_party):
+	for company in frappe.get_all("Company"):
+		old_party_currency = get_party_gle_currency(party_type, old_party, company.name)
+		new_party_currency = get_party_gle_currency(party_type, new_party, company.name)
+
+		if old_party_currency and new_party_currency and old_party_currency != new_party_currency:
+			frappe.throw(
+				_(
+					"Cannot merge {0} '{1}' into '{2}' as both have existing accounting entries in different currencies for company '{3}'."
+				).format(
+					party_type,
+					old_party,
+					new_party,
+					company.name,
+				)
+			)
