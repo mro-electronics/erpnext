@@ -218,19 +218,25 @@ def get_issue_list(doctype, txt, filters, limit_start, limit_page_length=20, ord
 @frappe.whitelist()
 def set_multiple_status(names, status):
 	for name in json.loads(names):
-		frappe.db.set_value("Issue", name, "status", status)
+		set_status(name, status)
 
 
 @frappe.whitelist()
 def set_status(name, status):
+	frappe.has_permission("Issue", "write", name, throw=True)
+
 	frappe.db.set_value("Issue", name, "status", status)
 
 
 def auto_close_tickets():
-	"""Auto-close replied support tickets after 7 days"""
-	auto_close_after_days = (
-		frappe.db.get_value("Support Settings", "Support Settings", "close_issue_after_days") or 7
-	)
+	"""
+	Auto-close replied support tickets as defined on `close_issue_after_days` in Support Settings.
+	Disables the feature if `close_issue_after_days` is set to 0.
+	"""
+	auto_close_after_days = frappe.db.get_single_value("Support Settings", "close_issue_after_days")
+
+	if not auto_close_after_days:
+		return
 
 	table = frappe.qb.DocType("Issue")
 	issues = (
