@@ -478,7 +478,7 @@ class ProductionPlan(Document):
 
 			item_details = get_item_details(data.item_code, throw=False)
 			if self.combine_items:
-				bom_no = item_details.bom_no
+				bom_no = item_details.get("bom_no")
 				if data.get("bom_no"):
 					bom_no = data.get("bom_no")
 
@@ -648,8 +648,8 @@ class ProductionPlan(Document):
 				self.status = "Completed"
 
 		if self.status != "Completed":
-			self.update_ordered_status()
 			self.update_requested_status()
+			self.update_ordered_status()
 
 		if close is not None:
 			self.db_set("status", self.status)
@@ -658,25 +658,17 @@ class ProductionPlan(Document):
 			self.update_bin_qty()
 
 	def update_ordered_status(self):
-		update_status = False
-		for d in self.po_items:
-			if d.planned_qty == d.ordered_qty:
-				update_status = True
-
-		if update_status and self.status != "Completed":
-			self.status = "In Process"
+		for child_table in ["po_items", "sub_assembly_items"]:
+			for item in self.get(child_table):
+				if item.ordered_qty:
+					self.status = "In Process"
+					return
 
 	def update_requested_status(self):
-		if not self.mr_items:
-			return
-
-		update_status = True
 		for d in self.mr_items:
-			if d.quantity != d.requested_qty:
-				update_status = False
-
-		if update_status:
-			self.status = "Material Requested"
+			if d.requested_qty:
+				self.status = "Material Requested"
+				break
 
 	def get_production_items(self):
 		item_dict = {}
@@ -798,6 +790,8 @@ class ProductionPlan(Document):
 			"stock_uom",
 			"bom_level",
 			"schedule_date",
+			"sales_order",
+			"sales_order_item",
 		]:
 			if row.get(field):
 				wo_data[field] = row.get(field)
@@ -837,6 +831,8 @@ class ProductionPlan(Document):
 					"qty",
 					"description",
 					"production_plan_item",
+					"sales_order",
+					"sales_order_item",
 				]:
 					po_data[field] = row.get(field)
 
@@ -1022,6 +1018,10 @@ class ProductionPlan(Document):
 
 			if not is_group_warehouse:
 				data.fg_warehouse = self.sub_assembly_warehouse
+
+			if not self.combine_sub_items:
+				data.sales_order = row.sales_order
+				data.sales_order_item = row.sales_order_item
 
 	def set_default_supplier_for_subcontracting_order(self):
 		items = [
@@ -1664,8 +1664,10 @@ def get_items_for_material_requests(doc, warehouses=None, get_parent_warehouse_d
 			)
 
 		sales_order = data.get("sales_order")
+		qty_precision = frappe.get_precision("Material Request Plan Item", "quantity")
 
 		for item_code, details in item_details.items():
+			details.qty = flt(details.qty, qty_precision)
 			so_item_details.setdefault(sales_order, frappe._dict())
 			if item_code in so_item_details.get(sales_order, {}):
 				so_item_details[sales_order][item_code]["qty"] = so_item_details[sales_order][item_code].get(
@@ -1784,7 +1786,7 @@ def get_item_data(item_code):
 	return {
 		"bom_no": item_details.get("bom_no"),
 		"stock_uom": item_details.get("stock_uom"),
-		# 		"description": item_details.get("description")
+		"description": item_details.get("description"),
 	}
 
 
@@ -1800,6 +1802,7 @@ def get_sub_assembly_items(
 	skip_available_sub_assembly_item=False,
 ):
 	data = get_bom_children(parent=bom_no)
+	precision = frappe.get_precision("Production Plan Sub Assembly Item", "qty")
 	for d in data:
 		if d.expandable:
 			parent_item_code = frappe.get_cached_value("BOM", bom_no, "item")
@@ -1837,7 +1840,7 @@ def get_sub_assembly_items(
 							"is_sub_contracted_item": d.is_sub_contracted_item,
 							"bom_level": indent,
 							"indent": indent,
-							"stock_qty": stock_qty,
+							"stock_qty": flt(stock_qty, precision),
 						}
 					)
 				)
