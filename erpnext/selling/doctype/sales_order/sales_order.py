@@ -13,8 +13,10 @@ from frappe.desk.notifications import clear_doctype_notifications
 from frappe.model.document import Document
 from frappe.model.mapper import get_mapped_doc
 from frappe.model.utils import get_fetch_values
-from frappe.query_builder.functions import Sum
+from frappe.query_builder import Case, Criterion
+from frappe.query_builder.functions import Abs, Sum
 from frappe.utils import add_days, cint, cstr, flt, get_link_to_form, getdate, nowdate, strip_html
+from pypika import Order
 
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
 	unlink_inter_company_doc,
@@ -22,6 +24,8 @@ from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
 	validate_inter_company_party,
 )
 from erpnext.accounts.party import CROSS_PARTY_FIELD_NO_MAP, get_party_account
+from erpnext.accounts.utils import build_qb_match_conditions
+from erpnext.controllers.mapper import get_qty_already_mapped
 from erpnext.controllers.selling_controller import SellingController
 from erpnext.manufacturing.doctype.blanket_order.blanket_order import (
 	validate_against_blanket_order,
@@ -40,6 +44,18 @@ from erpnext.stock.get_item_details import get_bin_details, get_default_bom, get
 from erpnext.stock.stock_balance import get_reserved_qty, update_bin_qty
 
 form_grid_templates = {"items": "templates/form_grid/item_grid.html"}
+
+LINK_SEARCH_FIELDTYPES = {
+	"Autocomplete",
+	"Data",
+	"Link",
+	"Long Text",
+	"Read Only",
+	"Select",
+	"Small Text",
+	"Text",
+	"Text Editor",
+}
 
 
 class WarehouseRequired(frappe.ValidationError):
@@ -205,6 +221,12 @@ class SalesOrder(SellingController):
 
 		if has_reserved_stock(self.doctype, self.name):
 			self.set_onload("has_reserved_stock", True)
+
+		if self.docstatus == 1 and self.status not in {"Closed", "On Hold"}:
+			self.set_onload(
+				"has_potentially_billable_items",
+				has_potentially_billable_items(self.name),
+			)
 
 	def before_validate(self):
 		self.set_has_unit_price_items()
@@ -977,6 +999,8 @@ def make_delivery_note(source_name, target_doc=None, kwargs=None):
 	if kwargs.for_reserved_stock:
 		sre_details = get_sre_reserved_qty_details_for_voucher("Sales Order", source_name)
 
+	mapped_qty_by_item = get_qty_already_mapped(target_doc, "so_detail")
+
 	mapper = {
 		"Sales Order": {"doctype": "Delivery Note", "validation": {"docstatus": ["=", 1]}},
 		"Sales Taxes and Charges": {"doctype": "Sales Taxes and Charges", "reset_value": True},
@@ -1031,15 +1055,17 @@ def make_delivery_note(source_name, target_doc=None, kwargs=None):
 				return False
 
 		return (
-			(abs(doc.delivered_qty) < abs(doc.qty)) or is_unit_price_row(doc)
+			(abs(doc.delivered_qty) + abs(mapped_qty_by_item.get(doc.name, 0)) < abs(doc.qty))
+			or (is_unit_price_row(doc) and doc.name not in mapped_qty_by_item)
 		) and doc.delivered_by_supplier != 1
 
+	def remaining_qty(source):
+		return flt(source.qty) - flt(source.delivered_qty) - flt(mapped_qty_by_item.get(source.name, 0))
+
 	def update_item(source, target, source_parent):
-		target.base_amount = (flt(source.qty) - flt(source.delivered_qty)) * flt(source.base_rate)
-		target.amount = (flt(source.qty) - flt(source.delivered_qty)) * flt(source.rate)
-		target.qty = (
-			flt(source.qty) if is_unit_price_row(source) else flt(source.qty) - flt(source.delivered_qty)
-		)
+		target.base_amount = remaining_qty(source) * flt(source.base_rate)
+		target.amount = remaining_qty(source) * flt(source.rate)
+		target.qty = flt(source.qty) if is_unit_price_row(source) else remaining_qty(source)
 
 		item = get_item_defaults(target.item_code, source_parent.company)
 		item_group = get_item_group_defaults(target.item_code, source_parent.company)
@@ -1114,8 +1140,20 @@ def make_delivery_note(source_name, target_doc=None, kwargs=None):
 	return target_doc
 
 
+def get_qty_net_of_returns(so_item) -> float:
+	"""Return the ordered quantity billable after returns and re-deliveries."""
+	qty = flt(so_item.qty)
+
+	return min(qty, max(qty - flt(so_item.returned_qty), flt(so_item.delivered_qty)))
+
+
 @frappe.whitelist()
-def make_sales_invoice(source_name, target_doc=None, ignore_permissions=False, args=None):
+def make_sales_invoice(
+	source_name: str,
+	target_doc: str | dict | Document | None = None,
+	args: str | dict | None = None,
+	ignore_permissions: bool = False,
+):
 	if args is None:
 		args = {}
 	if isinstance(args, str):
@@ -1123,9 +1161,51 @@ def make_sales_invoice(source_name, target_doc=None, ignore_permissions=False, a
 
 	# 0 qty is accepted, as the qty is uncertain for some items
 	has_unit_price_items = frappe.db.get_value("Sales Order", source_name, "has_unit_price_items")
+	billed_qty_by_item = None
+	pending_qty_by_item = {}
+	amount_allowance_by_item = {}
+	mapped_qty_by_item = get_qty_already_mapped(target_doc, "so_detail")
 
 	def is_unit_price_row(source):
 		return has_unit_price_items and source.qty == 0
+
+	def is_amount_billable(source):
+		from erpnext.controllers.status_updater import get_allowance_for
+
+		if source.item_code not in amount_allowance_by_item:
+			amount_allowance_by_item[source.item_code] = flt(
+				get_allowance_for(source.item_code, qty_or_amount="amount")[0]
+			)
+
+		allowance = amount_allowance_by_item[source.item_code]
+		return abs(flt(source.billed_amt)) < abs(flt(source.amount)) * (1 + allowance / 100)
+
+	def get_billed_qty_by_item():
+		nonlocal billed_qty_by_item
+
+		if billed_qty_by_item is None:
+			invoice_item = frappe.qb.DocType("Sales Invoice Item")
+			sales_order_item = frappe.qb.DocType("Sales Order Item")
+			rows = (
+				frappe.qb.from_(invoice_item)
+				.inner_join(sales_order_item)
+				.on(invoice_item.so_detail == sales_order_item.name)
+				.select(invoice_item.so_detail, Sum(invoice_item.qty).as_("qty"))
+				.where((invoice_item.docstatus == 1) & (sales_order_item.parent == source_name))
+				.groupby(invoice_item.so_detail)
+			).run(as_dict=True)
+			billed_qty_by_item = {row.so_detail: flt(row.qty) for row in rows}
+
+		return billed_qty_by_item
+
+	def get_pending_qty(source):
+		if source.name not in pending_qty_by_item:
+			billable_qty = get_qty_net_of_returns(source)
+			billable_qty -= get_billed_qty_by_item().get(source.name, 0)
+			billable_qty -= mapped_qty_by_item.get(source.name, 0)
+			pending_qty_by_item[source.name] = max(flt(billable_qty, source.precision("qty")), 0)
+
+		return pending_qty_by_item[source.name]
 
 	def postprocess(source, target):
 		set_missing_values(source, target)
@@ -1156,17 +1236,6 @@ def make_sales_invoice(source_name, target_doc=None, ignore_permissions=False, a
 		target.debit_to = get_party_account("Customer", source.customer, source.company)
 
 	def update_item(source, target, source_parent):
-		def get_billed_qty(so_item_name):
-			from frappe.query_builder.functions import Sum
-
-			table = frappe.qb.DocType("Sales Invoice Item")
-			query = (
-				frappe.qb.from_(table)
-				.select(Sum(table.qty).as_("qty"))
-				.where((table.docstatus == 1) & (table.so_detail == so_item_name))
-			)
-			return query.run(pluck="qty")[0] or 0
-
 		if source_parent.has_unit_price_items:
 			# 0 Amount rows (as seen in Unit Price Items) should be mapped as it is
 			pending_amount = flt(source.amount) - flt(source.billed_amt)
@@ -1175,11 +1244,7 @@ def make_sales_invoice(source_name, target_doc=None, ignore_permissions=False, a
 			target.amount = flt(source.amount) - flt(source.billed_amt)
 
 		target.base_amount = target.amount * flt(source_parent.conversion_rate)
-		target.qty = (
-			source.qty - get_billed_qty(source.name)
-			if (source.qty and source.billed_amt)
-			else (source.qty if is_unit_price_row(source) else source.qty - source.returned_qty)
-		)
+		target.qty = source.qty if is_unit_price_row(source) else get_pending_qty(source)
 
 		if source_parent.project:
 			target.cost_center = frappe.db.get_value("Project", source_parent.project, "cost_center")
@@ -1215,12 +1280,16 @@ def make_sales_invoice(source_name, target_doc=None, ignore_permissions=False, a
 					"parent": "sales_order",
 				},
 				"postprocess": update_item,
-				"condition": lambda doc: (
-					True
+				"condition": lambda doc: select_item(doc)
+				and (
+					doc.name not in mapped_qty_by_item
 					if is_unit_price_row(doc)
-					else (doc.qty and (doc.base_amount == 0 or abs(doc.billed_amt) < abs(doc.amount)))
-				)
-				and select_item(doc),
+					else (
+						doc.qty
+						and (doc.base_amount == 0 or is_amount_billable(doc))
+						and get_pending_qty(doc) > 0
+					)
+				),
 			},
 			"Sales Taxes and Charges": {
 				"doctype": "Sales Taxes and Charges",
@@ -1632,8 +1701,10 @@ def is_product_bundle(item_code):
 
 
 @frappe.whitelist()
-def make_work_orders(items, sales_order, company, project=None):
+def make_work_orders(items: str, sales_order: str, company: str, project: str | None = None):
 	"""Make Work Orders against the given Sales Order for the given `items`"""
+	frappe.has_permission("Sales Order", "read", sales_order, throw=True)
+
 	items = json.loads(items).get("items")
 	out = []
 
@@ -1900,3 +1971,87 @@ def get_work_order_items(sales_order, for_raw_material_request=0):
 @frappe.whitelist()
 def get_stock_reservation_status():
 	return frappe.db.get_single_value("Stock Settings", "enable_stock_reservation")
+
+
+def get_potentially_billable_item_criterion(sales_order, sales_order_item, item):
+	"""Return the amount check for UI candidates. The mapper checks pending quantity."""
+	global_allowance = flt(frappe.get_cached_value("Accounts Settings", None, "over_billing_allowance"))
+	allowance = (
+		Case().when(item.over_billing_allowance != 0, item.over_billing_allowance).else_(global_allowance)
+	)
+
+	has_amount_headroom = (sales_order_item.base_amount == 0) | (
+		Abs(sales_order_item.billed_amt) < Abs(sales_order_item.amount) * (1 + allowance / 100)
+	)
+	is_unit_price_row = (sales_order.has_unit_price_items == 1) & (sales_order_item.qty == 0)
+
+	return is_unit_price_row | ((sales_order_item.qty != 0) & has_amount_headroom)
+
+
+def has_potentially_billable_items(sales_order: str) -> bool:
+	"""Return whether a Sales Order has an item with billing amount headroom."""
+	so = qb.DocType("Sales Order")
+	so_item = qb.DocType("Sales Order Item")
+	item = qb.DocType("Item")
+
+	return bool(
+		qb.from_(so_item)
+		.inner_join(so)
+		.on(so.name == so_item.parent)
+		.left_join(item)
+		.on(item.name == so_item.item_code)
+		.select(so_item.name)
+		.where((so_item.parent == sales_order) & get_potentially_billable_item_criterion(so, so_item, item))
+		.limit(1)
+		.run()
+	)
+
+
+def get_text_search_criterion(sales_order, txt: str):
+	"""Match the search text the way the Sales Order link search does."""
+	meta = frappe.get_meta("Sales Order")
+	conditions = []
+
+	for fieldname in dict.fromkeys(["name", meta.title_field, *meta.get_search_fields()]):
+		if not fieldname:
+			continue
+
+		field = meta.get_field(fieldname)
+		if fieldname == "name" or (field and field.fieldtype in LINK_SEARCH_FIELDTYPES):
+			conditions.append(sales_order[fieldname].like(f"%{txt}%"))
+
+	return Criterion.any(conditions)
+
+
+@frappe.whitelist(methods=["GET"])
+@frappe.validate_and_sanitize_search_inputs
+def get_potentially_billable_sales_orders(
+	doctype: str, txt: str, searchfield: str, start: int, page_len: int, filters: dict
+):
+	"""Return Sales Orders that have an item with billing amount headroom."""
+	permission_type = "select" if frappe.only_has_select_perm("Sales Order") else "read"
+	frappe.has_permission("Sales Order", permission_type, throw=True)
+
+	so = qb.DocType("Sales Order")
+	so_item = qb.DocType("Sales Order Item")
+	item = qb.DocType("Item")
+
+	query = frappe.qb.get_query(
+		"Sales Order", fields=["name", "customer", "transaction_date"], filters=filters
+	)
+	if txt:
+		query = query.where(get_text_search_criterion(so, txt))
+
+	return (
+		query.inner_join(so_item)
+		.on(so_item.parent == so.name)
+		.left_join(item)
+		.on(item.name == so_item.item_code)
+		.where(get_potentially_billable_item_criterion(so, so_item, item))
+		.where(Criterion.all(build_qb_match_conditions("Sales Order")))
+		.distinct()
+		.orderby(so.transaction_date, order=Order.desc)
+		.limit(cint(page_len))
+		.offset(cint(start))
+		.run(as_dict=True)
+	)

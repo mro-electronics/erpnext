@@ -13,6 +13,7 @@ from erpnext.controllers.stock_controller import StockController
 from erpnext.stock.doctype.batch.batch import get_available_batches, get_batch_qty
 from erpnext.stock.doctype.inventory_dimension.inventory_dimension import get_inventory_dimensions
 from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+	combine_datetime,
 	get_available_serial_nos,
 )
 from erpnext.stock.doctype.serial_no.serial_no import get_serial_nos
@@ -136,8 +137,7 @@ class StockReconciliation(StockController):
 					{
 						"item_code": row.item_code,
 						"warehouse": row.warehouse,
-						"posting_date": self.posting_date,
-						"posting_time": self.posting_time,
+						"posting_datetime": combine_datetime(self.posting_date, self.posting_time),
 						"voucher_type": self.doctype,
 						"voucher_no": self.name,
 						"voucher_detail_no": row.name,
@@ -243,8 +243,7 @@ class StockReconciliation(StockController):
 						"doctype": "Serial and Batch Bundle",
 						"item_code": item.item_code,
 						"warehouse": item.warehouse,
-						"posting_date": self.posting_date,
-						"posting_time": self.posting_time,
+						"posting_datetime": combine_datetime(self.posting_date, self.posting_time),
 						"voucher_type": self.doctype,
 						"type_of_transaction": "Outward",
 					}
@@ -262,8 +261,7 @@ class StockReconciliation(StockController):
 						{
 							"item_code": item.item_code,
 							"warehouse": item.warehouse,
-							"posting_date": self.posting_date,
-							"posting_time": self.posting_time,
+							"posting_datetime": combine_datetime(self.posting_date, self.posting_time),
 							"ignore_warehouse": 1,
 						}
 					)
@@ -995,6 +993,102 @@ class StockReconciliation(StockController):
 			d.quantity_difference = flt(d.qty) - flt(d.current_qty)
 			d.amount_difference = flt(d.amount) - flt(d.current_amount)
 
+	def recalculate_difference_amount_from_ledger(self):
+		"""Sync the displayed current qty/rate and difference amount with the (reposted) ledger.
+
+		Submitted reconciliations freeze ``difference_amount`` and the per-row current values at
+		submit time, but reposting/backdated transactions recompute the reconciliation's Stock Ledger
+		Entries and rebuild the GL from them. Without this sync the document keeps showing stale figures
+		that no longer match the GL entries. Anchoring ``amount_difference`` to the row's summed
+		``stock_value_difference`` keeps the document and the GL consistent by construction.
+		"""
+		difference_amount = 0.0
+
+		for row in self.items:
+			stock_value_difference = flt(get_row_stock_value_difference(self.doctype, self.name, row.name))
+
+			amount = flt(flt(row.qty) * flt(row.valuation_rate), row.precision("amount"))
+			amount_difference = flt(stock_value_difference, row.precision("amount_difference"))
+			current_amount = flt(amount - amount_difference, row.precision("current_amount"))
+
+			current_qty = self.get_current_qty_from_ledger(row)
+			current_valuation_rate = (
+				flt(current_amount / current_qty, row.precision("current_valuation_rate"))
+				if current_qty
+				else 0.0
+			)
+
+			row.db_set(
+				{
+					"amount": amount,
+					"current_qty": current_qty,
+					"current_valuation_rate": current_valuation_rate,
+					"current_amount": current_amount,
+					"quantity_difference": flt(row.qty) - current_qty,
+					"amount_difference": amount_difference,
+				},
+				update_modified=False,
+			)
+
+			difference_amount += amount_difference
+
+		self.db_set(
+			"difference_amount",
+			flt(difference_amount, self.precision("difference_amount")),
+			update_modified=False,
+		)
+
+	def get_current_qty_from_ledger(self, row):
+		"""Current (pre-reconciliation) qty for a row, recomputed from the ledger after reposting.
+
+		Serial/batch rows cannot have backdated qty changes inserted before a future reconciliation
+		(blocked by ``check_future_entries_exists``), so their current qty is frozen and read straight
+		from the current bundle. Non-serial rows can float, so read the ledger balance just before the
+		reconciliation, excluding the reconciliation's own entries.
+		"""
+		if row.current_serial_and_batch_bundle:
+			total_qty = frappe.db.get_value(
+				"Serial and Batch Bundle", row.current_serial_and_batch_bundle, "total_qty"
+			)
+			return abs(flt(total_qty, row.precision("current_qty")))
+
+		reco_sle = frappe.db.get_value(
+			"Stock Ledger Entry",
+			{
+				"voucher_type": self.doctype,
+				"voucher_no": self.name,
+				"voucher_detail_no": row.name,
+				"is_cancelled": 0,
+			},
+			["posting_datetime", "creation"],
+			as_dict=True,
+		)
+		if not reco_sle:
+			return flt(row.current_qty, row.precision("current_qty"))
+
+		sle = frappe.qb.DocType("Stock Ledger Entry")
+		previous_sle = (
+			frappe.qb.from_(sle)
+			.select(sle.qty_after_transaction)
+			.where(
+				(sle.item_code == row.item_code)
+				& (sle.warehouse == row.warehouse)
+				& (sle.is_cancelled == 0)
+				& (
+					(sle.posting_datetime < reco_sle.posting_datetime)
+					| (
+						(sle.posting_datetime == reco_sle.posting_datetime)
+						& (sle.creation < reco_sle.creation)
+					)
+				)
+			)
+			.orderby(sle.posting_datetime, order=frappe.qb.desc)
+			.orderby(sle.creation, order=frappe.qb.desc)
+			.limit(1)
+		).run()
+
+		return flt(previous_sle[0][0], row.precision("current_qty")) if previous_sle else 0.0
+
 	def submit(self):
 		if len(self.items) > 100:
 			msgprint(
@@ -1068,12 +1162,15 @@ def get_item_and_warehouses(item_code, warehouse):
 	from frappe.utils.nestedset import get_descendants_of
 
 	items = []
+	stock_uom = frappe.get_cached_value("Item", item_code, "stock_uom")
 	if frappe.get_cached_value("Warehouse", warehouse, "is_group"):
 		childrens = get_descendants_of("Warehouse", warehouse, ignore_permissions=True, order_by="lft")
 		for ch_warehouse in childrens:
-			items.append(frappe._dict({"item_code": item_code, "warehouse": ch_warehouse}))
+			items.append(
+				frappe._dict({"item_code": item_code, "warehouse": ch_warehouse, "stock_uom": stock_uom})
+			)
 	else:
-		items = [frappe._dict({"item_code": item_code, "warehouse": warehouse})]
+		items = [frappe._dict({"item_code": item_code, "warehouse": warehouse, "stock_uom": stock_uom})]
 
 	return items
 
@@ -1083,7 +1180,8 @@ def get_items_for_stock_reco(warehouse, company):
 	items = frappe.db.sql(
 		f"""
 		select
-			i.name as item_code, i.item_name, bin.warehouse as warehouse, i.has_serial_no, i.has_batch_no
+			i.name as item_code, i.item_name, bin.warehouse as warehouse, i.has_serial_no, i.has_batch_no,
+			i.stock_uom
 		from
 			`tabBin` bin, `tabItem` i
 		where
@@ -1101,7 +1199,8 @@ def get_items_for_stock_reco(warehouse, company):
 	items += frappe.db.sql(
 		"""
 		select
-			i.name as item_code, i.item_name, id.default_warehouse as warehouse, i.has_serial_no, i.has_batch_no
+			i.name as item_code, i.item_name, id.default_warehouse as warehouse, i.has_serial_no,
+			i.has_batch_no, i.stock_uom
 		from
 			`tabItem` i, `tabItem Default` id
 		where
@@ -1147,6 +1246,7 @@ def get_item_data(row, qty, valuation_rate, serial_no=None):
 		"current_serial_no": serial_no,
 		"serial_no": serial_no,
 		"batch_no": row.get("batch_no"),
+		"stock_uom": row.get("stock_uom"),
 	}
 
 
@@ -1174,6 +1274,7 @@ def get_itemwise_batch(warehouse, posting_date, company, item_code=None):
 					"valuation_rate": row[9],
 					"item_name": row[1],
 					"batch_no": row[4],
+					"stock_uom": row[11],
 				}
 			)
 		)
@@ -1181,6 +1282,24 @@ def get_itemwise_batch(warehouse, posting_date, company, item_code=None):
 	return itemwise_batch_data
 
 
+def get_row_stock_value_difference(voucher_type: str, voucher_no: str, voucher_detail_no: str):
+	"""Net stock value change posted to the GL by a reconciliation row (sum of its SLEs)."""
+	sle = frappe.qb.DocType("Stock Ledger Entry")
+	result = (
+		frappe.qb.from_(sle)
+		.select(Sum(sle.stock_value_difference))
+		.where(
+			(sle.voucher_type == voucher_type)
+			& (sle.voucher_no == voucher_no)
+			& (sle.voucher_detail_no == voucher_detail_no)
+			& (sle.is_cancelled == 0)
+		)
+	).run()
+
+	return flt(result[0][0]) if result and result[0][0] else 0.0
+
+
+# nosemgrep: missing-argument-type-hint
 @frappe.whitelist()
 def get_stock_balance_for(
 	item_code: str,
@@ -1253,7 +1372,7 @@ def get_stock_balance_for(
 			or 0
 		)
 
-		if row.use_serial_batch_fields and row.batch_no and (qty or row.current_qty):
+		if row and row.use_serial_batch_fields and row.batch_no and (qty or row.current_qty):
 			rate = get_incoming_rate(
 				frappe._dict(
 					{

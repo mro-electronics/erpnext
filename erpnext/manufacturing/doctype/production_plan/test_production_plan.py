@@ -107,6 +107,36 @@ class TestProductionPlan(FrappeTestCase):
 		pln = frappe.get_doc("Production Plan", pln.name)
 		pln.cancel()
 
+	def test_production_plan_mr_creation_skips_zero_qty(self):
+		pln = create_production_plan(item_code="Test Production Item 1", do_not_submit=1)
+		pln.mr_items[0].quantity = 0
+		pln.save().submit()
+
+		pln.make_material_request()
+
+		quantities = frappe.get_all(
+			"Material Request Item", filters={"production_plan": pln.name}, pluck="qty"
+		)
+		self.assertEqual(len(quantities), len(pln.mr_items) - 1)
+		self.assertNotIn(0, quantities)
+
+	def test_production_plan_material_request_skips_zero_qty_items(self):
+		pln = create_production_plan(item_code="Test Production Item 1")
+		zero_qty_item, requested_item = pln.mr_items
+		zero_qty_item.quantity = "0"
+
+		pln.make_material_request()
+
+		material_request_items = frappe.get_all(
+			"Material Request Item",
+			filters={"production_plan": pln.name},
+			fields=["item_code", "qty"],
+		)
+		self.assertEqual(
+			material_request_items,
+			[{"item_code": requested_item.item_code, "qty": requested_item.quantity}],
+		)
+
 	def test_production_plan_start_date(self):
 		"Test if Work Order has same Planned Start Date as Prod Plan."
 		planned_date = add_to_date(date=None, days=3)
@@ -212,13 +242,15 @@ class TestProductionPlan(FrappeTestCase):
 		quantities = [d["quantity"] for d in mr_items]
 		rm_qty = sum(quantities)
 
-		# Only 2 MR item created - the first SO's requirement is fully covered by stock (v15 behaviour)
-		self.assertEqual(len(mr_items), 2)
-		self.assertEqual(rm_qty, 2, "Cascading failed: total MR qty should be 2 (3 needed - 1 in stock)")
+		# 3 MR items: SO1's requirement is covered by stock (qty=0 but reserved), SO2 and SO3 need 1 each
+		self.assertEqual(len(mr_items), 3)
+		self.assertEqual(
+			rm_qty, 2, "Cascading failed: total purchase qty should be 2 (3 needed - 1 in stock)"
+		)
 		self.assertEqual(
 			quantities,
-			[1, 1],
-			"Cascading failed: only second and third SO should need procurement (qty=1) since first SO consumed stock",
+			[0, 1, 1],
+			"SO1 stock-covered item should appear with qty=0 for reservation; SO2 and SO3 need qty=1",
 		)
 
 		sr.cancel()
@@ -251,11 +283,13 @@ class TestProductionPlan(FrappeTestCase):
 		pln = create_production_plan(
 			item_code="Test Production Item 1", use_multi_level_bom=0, ignore_existing_ordered_qty=0
 		)
-		self.assertFalse(len(pln.mr_items))
 
+		items_needing_purchase = [row.item_code for row in pln.mr_items if row.quantity > 0]
+		self.assertFalse(len(items_needing_purchase))
+
+		pln.cancel()
 		sr1.cancel()
 		sr2.cancel()
-		pln.cancel()
 
 	def test_production_plan_sales_orders(self):
 		"Test if previously fulfilled SO (with WO) is pulled into Prod Plan."
@@ -1385,9 +1419,12 @@ class TestProductionPlan(FrappeTestCase):
 
 		self.assertEqual(after_qty, before_qty)
 
-		completed_plans = get_non_completed_production_plans()
+		# Plan submission cached this list before the Work Orders updated ordered quantities.
+		frappe.local.request_cache.clear()
+		non_completed_plans = get_non_completed_production_plans()
+
 		for plan in plans:
-			self.assertFalse(plan in completed_plans)
+			self.assertNotIn(plan, non_completed_plans)
 
 	def test_resered_qty_for_production_plan_for_material_requests_with_multi_UOM(self):
 		from erpnext.stock.utils import get_or_make_bin
@@ -1601,6 +1638,118 @@ class TestProductionPlan(FrappeTestCase):
 				self.assertTrue(row.uom != row.stock_uom)
 				self.assertTrue(row.warehouse == mrp_warhouse)
 				self.assertEqual(row.quantity, 12.0)
+
+	def test_purchase_uom_falls_back_to_uom_conversion_factor(self):
+		from erpnext.manufacturing.doctype.bom.test_bom import create_nested_bom
+
+		if not frappe.db.exists("UOM Conversion Factor", {"from_uom": "Kg", "to_uom": "Gram"}):
+			frappe.get_doc(
+				doctype="UOM Conversion Factor",
+				category="Mass",
+				from_uom="Kg",
+				to_uom="Gram",
+				value=1000,
+			).insert()
+
+		rm = make_item("Test RM Item Global CF", {"is_stock_item": 1, "stock_uom": "Gram"})
+		rm.purchase_uom = "Kg"
+		rm.save()
+		self.assertFalse([row for row in rm.uoms if row.uom == "Kg"])
+
+		bom_tree = {"Test FG Item Global CF": {rm.name: {}}}
+		parent_bom = create_nested_bom(bom_tree, prefix="")
+
+		plan = create_production_plan(
+			item_code=parent_bom.item,
+			planned_qty=2000,
+			ignore_existing_ordered_qty=1,
+			skip_getting_mr_items=1,
+			do_not_submit=1,
+			warehouse="_Test Warehouse - _TC",
+		)
+		plan.for_warehouse = "_Test Warehouse - _TC"
+
+		items = get_items_for_material_requests(
+			plan.as_dict(), warehouses=[{"warehouse": "_Test Warehouse - _TC"}]
+		)
+
+		row = frappe._dict(next(item for item in items if item["item_code"] == rm.name))
+		self.assertEqual(row.uom, "Kg")
+		self.assertEqual(row.conversion_factor, 1000)
+		self.assertEqual(row.quantity, 2)
+
+	def test_variant_inherits_purchase_uom_conversion_factor_of_template(self):
+		from erpnext.manufacturing.doctype.bom.test_bom import create_nested_bom
+
+		template = make_item(
+			"TRMVCF",
+			{
+				"is_stock_item": 1,
+				"stock_uom": "Nos",
+				"has_variants": 1,
+				"attributes": [{"attribute": "Colour"}],
+			},
+		)
+		if not [row for row in template.uoms if row.uom == "Box"]:
+			template.purchase_uom = "Box"
+			template.append("uoms", {"uom": "Box", "conversion_factor": 12})
+			template.save()
+
+		if not frappe.db.exists("Item", "TRMVCF-RED"):
+			create_variant("TRMVCF", {"Colour": "Red"}).insert()
+
+		variant = frappe.get_doc("Item", "TRMVCF-RED")
+		variant.uoms = [row for row in variant.uoms if row.uom != "Box"]
+		variant.purchase_uom = "Box"
+		variant.save()
+
+		bom_tree = {"Test FG Item Variant CF": {variant.name: {}}}
+		parent_bom = create_nested_bom(bom_tree, prefix="")
+
+		plan = create_production_plan(
+			item_code=parent_bom.item,
+			planned_qty=24,
+			ignore_existing_ordered_qty=1,
+			skip_getting_mr_items=1,
+			do_not_submit=1,
+			warehouse="_Test Warehouse - _TC",
+		)
+		plan.for_warehouse = "_Test Warehouse - _TC"
+
+		items = get_items_for_material_requests(
+			plan.as_dict(), warehouses=[{"warehouse": "_Test Warehouse - _TC"}]
+		)
+
+		row = frappe._dict(next(item for item in items if item["item_code"] == variant.name))
+		self.assertEqual(row.conversion_factor, 12)
+		self.assertEqual(row.quantity, 2)
+
+	def test_missing_purchase_uom_conversion_factor_throws(self):
+		from erpnext.manufacturing.doctype.bom.test_bom import create_nested_bom
+
+		rm = make_item("Test RM Item Missing CF", {"is_stock_item": 1, "stock_uom": "Nos"})
+		rm.purchase_uom = "Box"
+		rm.save()
+
+		bom_tree = {"Test FG Item Missing CF": {rm.name: {}}}
+		parent_bom = create_nested_bom(bom_tree, prefix="")
+
+		plan = create_production_plan(
+			item_code=parent_bom.item,
+			planned_qty=10,
+			ignore_existing_ordered_qty=1,
+			skip_getting_mr_items=1,
+			do_not_submit=1,
+			warehouse="_Test Warehouse - _TC",
+		)
+		plan.for_warehouse = "_Test Warehouse - _TC"
+
+		with self.assertRaises(frappe.ValidationError) as error:
+			get_items_for_material_requests(
+				plan.as_dict(), warehouses=[{"warehouse": "_Test Warehouse - _TC"}]
+			)
+
+		self.assertIn("UOM Conversion factor", str(error.exception))
 
 	def test_mr_qty_for_same_rm_with_different_sub_assemblies(self):
 		from erpnext.manufacturing.doctype.bom.test_bom import create_nested_bom
@@ -1827,6 +1976,17 @@ class TestProductionPlan(FrappeTestCase):
 		mr_items = get_items_for_material_requests(pln.as_dict())
 		for d in mr_items:
 			self.assertEqual(d.get("quantity"), 1000.0)
+
+		source_warehouse = create_warehouse("MOQ Source Warehouse", company="_Test Company")
+		make_stock_entry(item_code=rm_item, qty=7, rate=100, target=source_warehouse)
+
+		mr_items = get_items_for_material_requests(
+			pln.as_dict(), warehouses=[{"warehouse": source_warehouse}]
+		)
+		self.assertEqual(len(mr_items), 2)
+		items_by_type = {d.get("material_request_type"): d for d in mr_items}
+		self.assertEqual(items_by_type["Material Transfer"].get("quantity"), 7.0)
+		self.assertEqual(items_by_type["Purchase"].get("quantity"), 1000.0)
 
 	def test_fg_item_quantity(self):
 		fg_item = make_item(properties={"is_stock_item": 1}).name
@@ -2057,6 +2217,46 @@ class TestProductionPlan(FrappeTestCase):
 		for row in plan.sub_assembly_items:
 			self.assertEqual(row.ordered_qty, 10.0)
 
+	def test_set_status_requires_write_permission(self):
+		pln = create_production_plan(item_code="Test Production Item 1")
+
+		with self.set_user(create_user_without_production_plan_access()):
+			doc = frappe.get_doc("Production Plan", pln.name)
+			self.assertRaises(frappe.PermissionError, doc.set_status)
+
+	def test_work_order_status_rollup_without_production_plan_permission(self):
+		pln = create_production_plan(item_code="Test Production Item 1")
+		pln.make_work_order()
+
+		wo_name = frappe.db.get_value("Work Order", {"production_plan": pln.name}, "name")
+		frappe.db.set_value("Production Plan Item", pln.po_items[0].name, "ordered_qty", 99)
+
+		with self.set_user(create_user_without_production_plan_access()):
+			frappe.get_doc("Work Order", wo_name).update_ordered_qty()
+
+		pln.reload()
+		self.assertEqual(pln.po_items[0].ordered_qty, 0.0)
+		self.assertEqual(pln.status, "Submitted")
+
+	def test_material_request_status_rollup_without_production_plan_permission(self):
+		pln = create_production_plan(item_code="Test Production Item 1")
+		pln.make_material_request()
+
+		plan_item = pln.mr_items[0].name
+		mr_name = frappe.db.get_value(
+			"Material Request Item", {"material_request_plan_item": plan_item}, "parent"
+		)
+		frappe.get_doc("Material Request", mr_name).submit()
+		frappe.db.set_value("Material Request Plan Item", plan_item, "requested_qty", 0)
+
+		with self.set_user(create_user_without_production_plan_access()):
+			frappe.get_doc("Material Request", mr_name).update_requested_qty_in_production_plan()
+
+		pln.reload()
+		requested_qty = frappe.db.get_value("Material Request Plan Item", plan_item, "requested_qty")
+		self.assertGreater(requested_qty, 0)
+		self.assertEqual(pln.status, "Material Requested")
+
 
 def create_production_plan(**args):
 	"""
@@ -2162,3 +2362,19 @@ def make_bom(**args):
 			bom.submit()
 
 	return bom
+
+
+def create_user_without_production_plan_access():
+	user = "test_production_plan_no_access@example.com"
+	if not frappe.db.exists("User", user):
+		frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": user,
+				"first_name": "Production Plan No Access",
+				"send_welcome_email": 0,
+				"roles": [{"doctype": "Has Role", "role": "Stock User"}],
+			}
+		).insert(ignore_permissions=True)
+
+	return user
