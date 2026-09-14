@@ -589,6 +589,11 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 		super.onload(doc, dt, dn);
 	}
 
+	company() {
+		super.company();
+		erpnext.accounts.dimensions.update_dimension(this.frm, this.frm.doctype);
+	}
+
 	refresh(doc, dt, dn) {
 		var me = this;
 		super.refresh();
@@ -690,7 +695,10 @@ erpnext.selling.SalesOrderController = class SalesOrderController extends erpnex
 					}
 
 					// sales invoice
-					if (flt(doc.per_billed) < 100 && frappe.model.can_create("Sales Invoice")) {
+					if (
+						doc.__onload?.has_potentially_billable_items &&
+						frappe.model.can_create("Sales Invoice")
+					) {
 						this.frm.add_custom_button(
 							__("Sales Invoice"),
 							() => me.make_sales_invoice(),

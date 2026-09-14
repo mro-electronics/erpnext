@@ -18,6 +18,7 @@ def execute(filters=None):
 class Analytics:
 	def __init__(self, filters=None):
 		self.filters = frappe._dict(filters or {})
+		self.entities = self.filters.get("entity") or []
 		self.date_field = (
 			"transaction_date"
 			if self.filters.doc_type in ["Sales Order", "Purchase Order"]
@@ -61,6 +62,7 @@ class Analytics:
 		self.update_company_list_for_parent_company()
 		self.get_columns()
 		self.get_data()
+		self.filter_data_by_entities()
 		self.get_chart_data()
 
 		# Skipping total row for tree-view reports
@@ -325,6 +327,23 @@ class Analytics:
 			filters=filters,
 		)
 
+	def filter_data_by_entities(self):
+		if not self.entities:
+			return
+
+		entities = set(self.entities)
+		selected_data = []
+		for row in self.data:
+			if row["entity"] not in entities:
+				continue
+
+			row = row.copy()
+			if "indent" in row:
+				row["indent"] = 0
+			selected_data.append(row)
+
+		self.data = selected_data
+
 	def get_rows(self):
 		self.data = []
 		self.get_periodic_data()
@@ -427,14 +446,16 @@ class Analytics:
 				break
 
 	def get_groups(self):
-		if self.filters.tree_type == "Territory":
-			parent = "parent_territory"
-		if self.filters.tree_type == "Customer Group":
-			parent = "parent_customer_group"
-		if self.filters.tree_type == "Item Group":
-			parent = "parent_item_group"
-		if self.filters.tree_type == "Supplier Group":
-			parent = "parent_supplier_group"
+		parent_field_map = {
+			"Territory": "parent_territory",
+			"Customer Group": "parent_customer_group",
+			"Item Group": "parent_item_group",
+			"Supplier Group": "parent_supplier_group",
+		}
+		if self.filters.tree_type not in parent_field_map:
+			frappe.throw(_("Invalid Tree Type {0}").format(self.filters.tree_type))
+
+		parent = parent_field_map[self.filters.tree_type]
 
 		self.depth_map = frappe._dict()
 
@@ -452,6 +473,9 @@ class Analytics:
 
 	def get_teams(self):
 		self.depth_map = frappe._dict()
+
+		if not frappe.db.exists("DocType", self.filters.doc_type):
+			frappe.throw(_("Invalid Document Type {0}").format(self.filters.doc_type))
 
 		self.group_entries = frappe.db.sql(
 			f""" select * from (select "Order Types" as name, 0 as lft,

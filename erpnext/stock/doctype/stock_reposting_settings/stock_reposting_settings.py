@@ -46,9 +46,11 @@ class StockRepostingSettings(Document):
 		if diff < 10:
 			self.end_time = get_time_str(add_to_date(self.start_time, hours=10, as_datetime=True))
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def convert_to_item_wh_reposting(self):
 		"""Convert Transaction reposting to Item Warehouse based reposting if Item Based Reposting has enabled."""
+
+		self.check_permission("write")
 
 		reposting_data = get_reposting_entries()
 
