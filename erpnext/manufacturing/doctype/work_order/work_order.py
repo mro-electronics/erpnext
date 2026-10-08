@@ -448,12 +448,11 @@ class WorkOrder(Document):
 		else:
 			status = "Cancelled"
 
-		if (
-			self.skip_transfer
-			and self.produced_qty
-			and self.qty > (flt(self.produced_qty) + flt(self.process_loss_qty))
-		):
-			status = "In Process"
+		if self.skip_transfer and self.produced_qty:
+			precision = frappe.get_precision("Work Order", "produced_qty")
+			total_qty = flt(self.produced_qty, precision) + flt(self.process_loss_qty, precision)
+			if flt(self.qty, precision) > flt(total_qty, precision):
+				status = "In Process"
 
 		return status
 
@@ -890,6 +889,9 @@ class WorkOrder(Document):
 			query = query.run()
 			qty = flt(query[0][0]) if query else 0
 
+			doc = frappe.get_doc("Production Plan", self.production_plan)
+			had_unordered_items = doc.has_unordered_items
+
 			if self.production_plan_item:
 				frappe.db.set_value("Production Plan Item", self.production_plan_item, "ordered_qty", qty)
 			elif self.production_plan_sub_assembly_item:
@@ -900,10 +902,13 @@ class WorkOrder(Document):
 					qty,
 				)
 
-			doc = frappe.get_doc("Production Plan", self.production_plan)
+			doc.reload()
 			doc.flags.ignore_permissions = True
-			doc.set_status()
-			doc.db_set("status", doc.status)
+			doc.update_status_and_bin_qty()
+			if had_unordered_items != doc.has_unordered_items:
+				doc.update_raw_material_bin_qty()
+			else:
+				doc.update_raw_material_bin_qty({d.item_code for d in self.required_items})
 
 	def update_work_order_qty_in_so(self):
 		if (not self.sales_order and not self.sales_order_item) or self.production_plan_sub_assembly_item:
@@ -1054,7 +1059,7 @@ class WorkOrder(Document):
 
 		return holidays[holiday_list]
 
-	def update_operation_status(self):
+	def update_operation_status(self, operation_id=None):
 		allowance_percentage = flt(
 			frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order")
 		)
@@ -1069,7 +1074,7 @@ class WorkOrder(Document):
 				d.status = "Work in Progress"
 			elif qty == flt(self.qty, precision):
 				d.status = "Completed"
-			elif qty <= flt(max_allowed_qty_for_wo, precision):
+			elif qty <= flt(max_allowed_qty_for_wo, precision) or d.name != operation_id:
 				d.status = "Completed"
 			else:
 				frappe.throw(_("Completed Qty cannot be greater than 'Qty to Manufacture'"))
@@ -1423,6 +1428,14 @@ class WorkOrder(Document):
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def get_bom_operations(doctype, txt, searchfield, start, page_len, filters):
+	parent = filters.get("parent")
+	parenttype = filters.get("parenttype") or "BOM"
+	if not parent or not frappe.db.exists(parenttype, parent):
+		return []
+
+	ptype = "select" if frappe.only_has_select_perm(parenttype) else "read"
+	frappe.has_permission(parenttype, ptype, doc=parent, throw=True)
+
 	if txt:
 		filters["operation"] = ("like", "%%%s%%" % txt)
 
@@ -1694,14 +1707,16 @@ def get_default_warehouse():
 	}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def stop_unstop(work_order, status):
 	"""Called from client side on Stop/Unstop event"""
 
-	if not frappe.has_permission("Work Order", "write"):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	frappe.has_permission("Work Order", "write", throw=True)
 
+	# the check above is doctype level and never consults User Permissions, so on its own it lets
+	# a caller restricted to one company stop another company's orders
 	pro_order = frappe.get_doc("Work Order", work_order)
+	pro_order.check_permission("write")
 
 	if pro_order.status == "Closed":
 		frappe.throw(_("Closed Work Order can not be stopped or Re-opened"))
@@ -1748,12 +1763,13 @@ def make_job_card(work_order, operations):
 				create_job_card(work_order, row, auto_create=True)
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def close_work_order(work_order, status):
-	if not frappe.has_permission("Work Order", "write"):
-		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	frappe.has_permission("Work Order", "write", throw=True)
 
+	# doctype level above, record level here — see stop_unstop()
 	work_order = frappe.get_doc("Work Order", work_order)
+	work_order.check_permission("write")
 	if work_order.get("operations"):
 		job_cards = frappe.get_list(
 			"Job Card",
