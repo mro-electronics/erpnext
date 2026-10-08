@@ -507,6 +507,15 @@ class TestWorkOrder(FrappeTestCase):
 		for stock_entry in stock_entries:
 			stock_entry.cancel()
 
+	def test_skip_transfer_work_order_completed_with_fractional_process_loss(self):
+		# 11.2 + 0.2 == 11.399999999999999 in float, which must still complete 11.4
+		work_order = frappe.new_doc("Work Order")
+		work_order.update(
+			{"docstatus": 1, "skip_transfer": 1, "qty": 11.4, "produced_qty": 11.2, "process_loss_qty": 0.2}
+		)
+
+		self.assertEqual(work_order.get_status(), "Completed")
+
 	def test_work_order_material_transferred_qty_with_process_loss(self):
 		stock_entries = []
 		item_code = make_item("_Test Item For Process Loss", {"is_stock_item": 1}).name
@@ -820,6 +829,7 @@ class TestWorkOrder(FrappeTestCase):
 				self.assertEqual(row.qty, 10)
 
 				bundle_id = frappe.get_doc("Serial and Batch Bundle", row.serial_and_batch_bundle)
+				self.assertEqual(bundle_id.company, ste1.company)
 				for bundle_row in bundle_id.get("entries"):
 					self.assertTrue(bundle_row.batch_no in batches)
 					batches.remove(bundle_row.batch_no)
@@ -834,6 +844,7 @@ class TestWorkOrder(FrappeTestCase):
 				self.assertEqual(row.qty, 20)
 
 				bundle_id = frappe.get_doc("Serial and Batch Bundle", row.serial_and_batch_bundle)
+				self.assertEqual(bundle_id.company, ste1.company)
 				for bundle_row in bundle_id.get("entries"):
 					self.assertTrue(bundle_row.batch_no in batches)
 					remaining_batches.append(bundle_row.batch_no)
@@ -1045,6 +1056,20 @@ class TestWorkOrder(FrappeTestCase):
 
 		wo.load_from_db()
 		self.assertEqual(wo.status, "Completed")
+
+		from erpnext.stock.stock_balance import get_planned_qty
+
+		completed_planned_qty = get_bin(wo.production_item, wo.fg_warehouse).planned_qty
+		expected_completed_qty = get_planned_qty(wo.production_item, wo.fg_warehouse)
+
+		se.cancel()
+		wo.reload()
+		self.assertEqual(wo.status, "In Process")
+		cancelled_planned_qty = get_bin(wo.production_item, wo.fg_warehouse).planned_qty
+		expected_cancelled_qty = get_planned_qty(wo.production_item, wo.fg_warehouse)
+
+		self.assertEqual(completed_planned_qty, expected_completed_qty)
+		self.assertEqual(cancelled_planned_qty, expected_cancelled_qty)
 
 	@timeout(seconds=60)
 	def test_job_card_scrap_item(self):

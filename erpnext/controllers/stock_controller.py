@@ -69,25 +69,37 @@ class StockController(AccountsController):
 		self.reset_conversion_factor()
 
 	def validate_warehouse_of_sabb(self):
-		if self.is_internal_transfer():
-			return
-
+		is_internal_transfer = self.is_internal_transfer()
 		doc_before_save = self.get_doc_before_save()
+		bundle_details = {}
 
 		for row in self.items:
-			if not row.get("serial_and_batch_bundle"):
-				continue
+			for fieldname in ("serial_and_batch_bundle", "rejected_serial_and_batch_bundle"):
+				bundle = row.get(fieldname)
+				if not bundle:
+					continue
 
-			sabb_details = frappe.db.get_value(
-				"Serial and Batch Bundle",
-				row.serial_and_batch_bundle,
-				["type_of_transaction", "warehouse", "has_serial_no"],
-				as_dict=True,
-			)
+				if bundle not in bundle_details:
+					bundle_details[bundle] = frappe.db.get_value(
+						"Serial and Batch Bundle",
+						bundle,
+						["company", "type_of_transaction", "warehouse", "has_serial_no"],
+						as_dict=True,
+					)
+
+				sabb_details = bundle_details[bundle]
+				if sabb_details and sabb_details.company != self.company:
+					frappe.throw(
+						_(
+							"Row #{0}: Company {1} does not match with the company {2} in Serial and Batch Bundle {3}."
+						).format(row.idx, self.company, sabb_details.company, bundle)
+					)
+
+			sabb_details = bundle_details.get(row.get("serial_and_batch_bundle"))
 			if not sabb_details:
 				continue
 
-			if sabb_details.type_of_transaction != "Outward":
+			if is_internal_transfer or sabb_details.type_of_transaction != "Outward":
 				continue
 
 			warehouse = row.get("warehouse") or row.get("s_warehouse")
@@ -1533,7 +1545,7 @@ def show_accounting_ledger_preview(company: str, doctype: str, docname: str):
 
 @frappe.whitelist()
 def show_stock_ledger_preview(company: str, doctype: str, docname: str):
-	filters = frappe._dict(company=company)
+	filters = frappe._dict(company=company, valuation_field_type="Currency")
 	doc = frappe.get_doc(doctype, docname)
 	doc.check_permission("read")
 	doc.run_method("before_sl_preview")
@@ -1574,7 +1586,7 @@ def get_accounting_ledger_preview(doc, filters):
 	columns = get_gl_columns(filters)
 	gl_entries = get_gl_entries_for_preview(doc.doctype, doc.name, fields)
 
-	gl_columns = get_columns(columns, fields)
+	gl_columns = get_columns(columns, fields, erpnext.get_company_currency(filters.company))
 	gl_data = get_data(fields, gl_entries)
 
 	return gl_columns, gl_data
@@ -1616,7 +1628,7 @@ def get_stock_ledger_preview(doc, filters):
 		columns = get_sl_columns(filters)
 		sl_entries = get_sl_entries_for_preview(doc.doctype, doc.name, fields)
 
-		sl_columns = get_columns(columns, columns_fields)
+		sl_columns = get_columns(columns, columns_fields, erpnext.get_company_currency(filters.company))
 		sl_data = get_data(columns_fields, sl_entries)
 
 	return sl_columns, sl_data
@@ -1635,7 +1647,8 @@ def get_sl_entries_for_preview(doctype, docname, fields):
 			entry["out_qty"] = abs(entry.actual_qty)
 			entry["in_qty"] = 0
 
-		entry["in_out_rate"] = entry["valuation_rate"]
+		if entry.actual_qty < 0:
+			entry["in_out_rate"] = entry.stock_value_difference / entry.actual_qty
 
 	return sl_entries
 
@@ -1644,12 +1657,23 @@ def get_gl_entries_for_preview(doctype, docname, fields):
 	return frappe.get_all("GL Entry", filters={"voucher_type": doctype, "voucher_no": docname}, fields=fields)
 
 
-def get_columns(raw_columns, fields):
-	return [
-		{"name": d.get("label"), "editable": False, "width": 110, "fieldtype": d.get("fieldtype")}
-		for d in raw_columns
-		if not d.get("hidden") and d.get("fieldname") in fields
-	]
+def get_columns(raw_columns, fields, currency):
+	columns = []
+	for source_column in raw_columns:
+		if source_column.get("hidden") or source_column.get("fieldname") not in fields:
+			continue
+
+		column = {
+			"name": source_column.get("label"),
+			"editable": False,
+			"width": 110,
+			"fieldtype": source_column.get("fieldtype"),
+		}
+		if column["fieldtype"] == "Currency":
+			column["options"] = currency
+		columns.append(column)
+
+	return columns
 
 
 def get_data(raw_columns, raw_data):
