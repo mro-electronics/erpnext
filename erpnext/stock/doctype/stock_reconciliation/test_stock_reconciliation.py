@@ -5,6 +5,7 @@
 # For license information, please see license.txt
 
 import json
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase, change_settings
@@ -878,6 +879,53 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 		self.assertEqual(reco.difference_amount, 17500)
 		self.assert_reco_difference_matches_gl(reco.name)
 
+	def test_repost_refreshes_only_the_reposted_row(self):
+		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
+		from erpnext.stock.doctype.stock_reconciliation import stock_reconciliation
+
+		warehouse = "_Test Warehouse - _TC"
+		reposted_item, other_item = self.make_item().name, self.make_item().name
+		for item_code in (reposted_item, other_item):
+			make_stock_entry(
+				item_code=item_code,
+				target=warehouse,
+				qty=100,
+				basic_rate=100,
+				posting_date=add_days(nowdate(), -5),
+			)
+
+		reco = create_stock_reconciliation(
+			item_code=reposted_item,
+			warehouse=warehouse,
+			qty=100,
+			rate=200,
+			posting_date=add_days(nowdate(), -2),
+			do_not_save=True,
+		)
+		reco.append(
+			"items", {"item_code": other_item, "warehouse": warehouse, "qty": 100, "valuation_rate": 300}
+		)
+		reco.submit()
+		reposted_row = next(row.name for row in reco.items if row.item_code == reposted_item)
+
+		with patch.object(
+			stock_reconciliation,
+			"get_row_stock_value_difference",
+			wraps=stock_reconciliation.get_row_stock_value_difference,
+		) as get_row_difference:
+			make_stock_entry(
+				item_code=reposted_item,
+				target=warehouse,
+				qty=50,
+				basic_rate=40,
+				posting_date=add_days(nowdate(), -3),
+			)
+
+		self.assertEqual({call.args[2] for call in get_row_difference.call_args_list}, {reposted_row})
+		reco.load_from_db()
+		self.assertEqual(reco.difference_amount, (20000 - 12000) + (30000 - 10000))
+		self.assert_reco_difference_matches_gl(reco.name)
+
 	def test_difference_amount_synced_with_gl_after_repost_batched(self):
 		from erpnext.stock.doctype.landed_cost_voucher.test_landed_cost_voucher import (
 			make_landed_cost_voucher,
@@ -1349,6 +1397,39 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 			self.assertEqual(row.qty, 1)
 			self.assertAlmostEqual(row.incoming_rate, 1000.00)
 			self.assertEqual(row.serial_no, serial_nos[row.idx - 1])
+
+	def test_opening_stock_reco_for_serial_nos_without_stock(self):
+		from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import make_serial_nos
+
+		item = self.make_item(
+			"Test Serial No Item Opening Stock Not Reconcile All",
+			{
+				"is_stock_item": 1,
+				"has_serial_no": 1,
+				"serial_no_series": "SNN-TEST-OPENING-NRALL-S-.###",
+			},
+		)
+
+		warehouse = "_Test Warehouse - _TC"
+		serial_nos = [f"SNN-TEST-OPENING-NRALL-{idx}" for idx in range(1, 6)]
+		make_serial_nos(item.name, [{"serial_no": serial_no} for serial_no in serial_nos])
+
+		with change_settings("Stock Settings", {"allow_negative_stock": 0}):
+			sr = create_stock_reconciliation(
+				item_code=item.name,
+				warehouse=warehouse,
+				qty=5,
+				rate=100,
+				purpose="Opening Stock",
+				expense_account="Temporary Opening - _TC",
+				reconcile_all_serial_batch=0,
+				serial_no=serial_nos,
+			)
+
+		self.assertEqual(sr.docstatus, 1)
+		self.assertEqual(sr.items[0].current_qty, 0)
+		self.assertFalse(sr.items[0].current_serial_and_batch_bundle)
+		self.assertEqual(get_stock_balance(item.name, warehouse), 5)
 
 	def test_stock_reco_with_legacy_batch(self):
 		from erpnext.stock.doctype.batch.batch import get_batch_qty
@@ -1833,6 +1914,96 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 
 		self.assertFalse(status == "Active")
 
+	def test_serial_nos_scoped_to_selected_batch(self):
+		from erpnext.stock.doctype.batch.batch import get_batch_qty
+		from erpnext.stock.doctype.stock_reconciliation.stock_reconciliation import get_stock_balance_for
+
+		item_code = self.make_item(
+			"Test Multi Batch Serial Item Reco",
+			{
+				"is_stock_item": 1,
+				"has_batch_no": 1,
+				"create_new_batch": 1,
+				"batch_number_series": "TMBSIR-BATCH-.###",
+				"has_serial_no": 1,
+				"serial_no_series": "TMBSIR-SN-.####",
+			},
+		).name
+		warehouse = "_Test Warehouse - _TC"
+
+		batch_wise_serial_nos = {}
+		for qty in (5, 3):
+			pr = make_purchase_receipt(
+				item_code=item_code,
+				warehouse=warehouse,
+				qty=qty,
+				rate=100,
+				posting_date=add_days(nowdate(), -3),
+			)
+			bundle = pr.items[0].serial_and_batch_bundle
+			batch_wise_serial_nos[get_batch_from_bundle(bundle)] = get_serial_nos_from_bundle(bundle)
+
+		first_batch, second_batch = batch_wise_serial_nos
+		serial_nos = batch_wise_serial_nos[second_batch]
+
+		data = get_stock_balance_for(
+			item_code,
+			warehouse,
+			nowdate(),
+			nowtime(),
+			batch_no=second_batch,
+			row={
+				"use_serial_batch_fields": 1,
+				"item_code": item_code,
+				"warehouse": warehouse,
+				"batch_no": second_batch,
+			},
+			company="_Test Company",
+		)
+
+		self.assertEqual(data["qty"], 3)
+		self.assertEqual(sorted(data["serial_nos"].split("\n")), sorted(serial_nos))
+
+		reco = create_stock_reconciliation(
+			item_code=item_code,
+			warehouse=warehouse,
+			qty=2,
+			rate=100,
+			batch_no=second_batch,
+			serial_no="\n".join(serial_nos[:2]),
+			use_serial_batch_fields=1,
+			reconcile_all_serial_batch=0,
+		)
+
+		reco.load_from_db()
+		self.assertEqual(reco.items[0].current_qty, 3)
+		self.assertEqual(
+			sorted(get_serial_nos_from_bundle(reco.items[0].current_serial_and_batch_bundle)),
+			sorted(serial_nos),
+		)
+		self.assertEqual(get_batch_qty(second_batch, warehouse, item_code), 2)
+		self.assertEqual(get_batch_qty(first_batch, warehouse, item_code), 5)
+
+		# Backdated fetch: the reco above already pulled serial_nos[2] out of the warehouse,
+		# but on the day before the reco all three batch serials were still in stock.
+		data = get_stock_balance_for(
+			item_code,
+			warehouse,
+			add_days(nowdate(), -1),
+			nowtime(),
+			batch_no=second_batch,
+			row={
+				"use_serial_batch_fields": 1,
+				"item_code": item_code,
+				"warehouse": warehouse,
+				"batch_no": second_batch,
+			},
+			company="_Test Company",
+		)
+
+		self.assertEqual(data["qty"], 3)
+		self.assertEqual(sorted(data["serial_nos"].split("\n")), sorted(serial_nos))
+
 	def test_change_valuation_of_batch_using_backdated_stock_reco(self):
 		from erpnext.stock.doctype.batch.batch import get_batch_qty
 		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
@@ -1975,47 +2146,7 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 			self.assertEqual(docstatus, 2)
 
 	def test_stock_reco_with_opening_stock_with_diff_inventory(self):
-		from erpnext.stock.doctype.inventory_dimension.test_inventory_dimension import (
-			create_inventory_dimension,
-		)
-
-		if frappe.db.exists("DocType", "Plant"):
-			return
-
-		doctype = frappe.get_doc(
-			{
-				"doctype": "DocType",
-				"name": "Plant",
-				"module": "Stock",
-				"custom": 1,
-				"fields": [
-					{
-						"fieldname": "plant_name",
-						"fieldtype": "Data",
-						"label": "Plant Name",
-						"reqd": 1,
-					}
-				],
-				"autoname": "field:plant_name",
-			}
-		)
-		doctype.insert(ignore_permissions=True)
-		create_inventory_dimension(dimension_name="ID-Plant", reference_document="Plant")
-
-		plant_a = frappe.get_doc(
-			{
-				"doctype": "Plant",
-				"plant_name": "Plant A",
-			}
-		).insert(ignore_permissions=True)
-
-		plant_b = frappe.get_doc(
-			{
-				"doctype": "Plant",
-				"plant_name": "Plant B",
-			}
-		).insert(ignore_permissions=True)
-
+		plant_a, plant_b = make_plant_dimension()
 		warehouse = "_Test Warehouse - _TC"
 
 		item_code = "Item-Test"
@@ -2034,7 +2165,7 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 				"warehouse": warehouse,
 				"qty": 5,
 				"valuation_rate": 100,
-				"id_plant": plant_a.name,
+				"id_plant": plant_a,
 			},
 		)
 
@@ -2045,7 +2176,7 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 				"warehouse": warehouse,
 				"qty": 3,
 				"valuation_rate": 110,
-				"id_plant": plant_b.name,
+				"id_plant": plant_b,
 			},
 		)
 
@@ -2064,9 +2195,9 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 			["item_code", "id_plant", "actual_qty", "valuation_rate"],
 		)
 		for s in sle:
-			if s.id_plant == plant_a.name:
+			if s.id_plant == plant_a:
 				self.assertEqual(s.actual_qty, 5)
-			elif s.id_plant == plant_b.name:
+			elif s.id_plant == plant_b:
 				self.assertEqual(s.actual_qty, 3)
 
 	def test_serial_no_status_with_backdated_stock_reco(self):
@@ -2445,6 +2576,51 @@ class TestStockReconciliation(FrappeTestCase, StockTestMixin):
 		self.assertEqual(flt(args.actual_qty), 0.0)
 		self.assertEqual(flt(get_stock_reco_qty_shift(args)), 0.0)
 
+	def test_backdated_batch_transfer_into_a_reconciled_warehouse_is_blocked(self):
+		from erpnext.stock.doctype.item.test_item import make_item
+		from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+			SerialNoExistsInFutureTransactionError,
+		)
+		from erpnext.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
+
+		item = make_item(properties={"valuation_method": "Moving Average", "has_batch_no": 1}).name
+		batch = frappe.get_doc(
+			{"doctype": "Batch", "batch_id": frappe.generate_hash(length=10), "item": item}
+		).insert()
+		source, target = "_Test Warehouse 1 - _TC", "_Test Warehouse - _TC"
+
+		make_stock_entry(
+			item_code=item,
+			target=source,
+			qty=10,
+			rate=100,
+			batch_no=batch.name,
+			use_serial_batch_fields=1,
+			posting_date=add_days(nowdate(), -5),
+		)
+		create_stock_reconciliation(
+			item_code=item,
+			warehouse=target,
+			qty=3,
+			rate=207,
+			batch_no=batch.name,
+			use_serial_batch_fields=1,
+			reconcile_all_serial_batch=0,
+			posting_date=add_days(nowdate(), -1),
+		)
+
+		transfer = make_stock_entry(
+			item_code=item,
+			source=source,
+			target=target,
+			qty=10,
+			batch_no=batch.name,
+			use_serial_batch_fields=1,
+			posting_date=add_days(nowdate(), -3),
+			do_not_submit=True,
+		)
+		self.assertRaises(SerialNoExistsInFutureTransactionError, transfer.submit)
+
 
 def create_batch_item_with_batch(item_name, batch_id):
 	batch_item_doc = create_item(item_name, is_stock_item=1)
@@ -2616,3 +2792,29 @@ def set_valuation_method(item_code, valuation_method):
 
 
 test_dependencies = ["Item", "Warehouse"]
+
+
+def make_plant_dimension():
+	from erpnext.stock.doctype.inventory_dimension.test_inventory_dimension import (
+		create_inventory_dimension,
+	)
+
+	if not frappe.db.exists("DocType", "Plant"):
+		frappe.get_doc(
+			{
+				"doctype": "DocType",
+				"name": "Plant",
+				"module": "Stock",
+				"custom": 1,
+				"fields": [
+					{"fieldname": "plant_name", "fieldtype": "Data", "label": "Plant Name", "reqd": 1}
+				],
+				"autoname": "field:plant_name",
+			}
+		).insert(ignore_permissions=True)
+	create_inventory_dimension(dimension_name="ID-Plant", reference_document="Plant")
+
+	return [
+		frappe.get_doc({"doctype": "Plant", "plant_name": name}).insert(ignore_if_duplicate=True).name
+		for name in ("Plant A", "Plant B")
+	]

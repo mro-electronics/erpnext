@@ -2,13 +2,15 @@
 # See license.txt
 import frappe
 from frappe.test_runner import make_test_records
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests.utils import FrappeTestCase, change_settings
+from frappe.utils import get_datetime
 
 from erpnext.manufacturing.doctype.job_card.job_card import make_stock_entry
 from erpnext.manufacturing.doctype.operation.test_operation import make_operation
 from erpnext.manufacturing.doctype.routing.test_routing import create_routing, setup_bom
 from erpnext.manufacturing.doctype.workstation.workstation import (
 	NotInWorkingHoursError,
+	OverlapError,
 	WorkstationHolidayError,
 	check_if_within_operating_hours,
 	get_raw_materials,
@@ -20,6 +22,38 @@ make_test_records("Workstation")
 
 
 class TestWorkstation(FrappeTestCase):
+	def make_workstation(self, name, *timings):
+		doc = frappe.new_doc("Workstation", workstation_name=name)
+		for start_time, end_time in timings:
+			doc.append("working_hours", {"start_time": start_time, "end_time": end_time})
+		return doc
+
+	def test_back_to_back_working_hours_do_not_overlap(self):
+		doc = self.make_workstation(
+			"_Test Back To Back Shifts", ("08:00:00", "16:00:00"), ("16:00:00", "23:59:59")
+		)
+		doc.insert()
+
+		# also holds when the touching row is added to an already saved workstation
+		doc.append("working_hours", {"start_time": "05:00:00", "end_time": "08:00:00"})
+		doc.save()
+		self.assertEqual(len(doc.working_hours), 3)
+
+	def test_overlapping_working_hours_raise_error(self):
+		for timing in (
+			("15:00:00", "20:00:00"),  # partial overlap at the end
+			("06:00:00", "09:00:00"),  # partial overlap at the start
+			("10:00:00", "12:00:00"),  # enclosed
+			("07:00:00", "17:00:00"),  # enclosing
+			("08:00:00", "16:00:00"),  # identical
+		):
+			with self.subTest(timing=timing):
+				doc = self.make_workstation("_Test Overlapping Shifts", ("08:00:00", "16:00:00"))
+				doc.insert()
+				doc.append("working_hours", {"start_time": timing[0], "end_time": timing[1]})
+				self.assertRaises(OverlapError, doc.save)
+				doc.delete()
+
 	def test_get_raw_materials_without_items(self):
 		job_card = frappe.get_doc(
 			{
@@ -150,6 +184,43 @@ class TestWorkstation(FrappeTestCase):
 			)
 			self.assertEqual(hour_rate, 250)
 			self.assertEqual(operating_cost, expected_operating_cost)
+
+	@change_settings("Manufacturing Settings", {"disable_capacity_planning": 0, "allow_overtime": 0})
+	def test_operation_planned_times_span_all_scheduled_slots(self):
+		from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
+		from erpnext.manufacturing.doctype.work_order.test_work_order import make_wo_order_test_record
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		workstation = make_workstation(workstation_name="_Test WS Multi Day")
+		workstation.set("working_hours", [])
+		workstation.append("working_hours", {"start_time": "08:00:00", "end_time": "12:00:00"})
+		workstation.save()
+
+		operation = make_operation(operation="_Test WS Multi Day Op", workstation=workstation.name).name
+		fg_item = make_item("_Test WS Multi Day FG", {"is_stock_item": 1}).name
+		rm_item = make_item("_Test WS Multi Day RM", {"is_stock_item": 1}).name
+		bom = make_bom(item=fg_item, raw_materials=[rm_item], with_operations=1, do_not_submit=True)
+		bom.append(
+			"operations",
+			{"operation": operation, "workstation": workstation.name, "time_in_mins": 360, "hour_rate": 100},
+		)
+		bom.submit()
+
+		work_order = make_wo_order_test_record(
+			item=fg_item, bom_no=bom.name, qty=1, planned_start_date="2031-03-03 08:00:00", skip_transfer=1
+		)
+		self.assertEqual(
+			frappe.db.get_value(
+				"Work Order Operation",
+				{"parent": work_order.name},
+				["planned_start_time", "planned_end_time"],
+				as_dict=True,
+			),
+			{
+				"planned_start_time": get_datetime("2031-03-03 08:00:00"),
+				"planned_end_time": get_datetime("2031-03-04 10:00:00"),
+			},
+		)
 
 
 def make_workstation(*args, **kwargs):

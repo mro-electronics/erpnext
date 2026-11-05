@@ -132,6 +132,7 @@ class JournalEntry(AccountsController):
 
 		self.validate_account_company()
 		self.validate_party()
+		self.ensure_supplier_is_not_blocked()
 		self.validate_entries_for_advance()
 		self.validate_multi_currency()
 		self.set_amounts_in_company_currency()
@@ -196,7 +197,7 @@ class JournalEntry(AccountsController):
 		self.has_asset_adjustment_entry()
 
 	def cancel(self):
-		if len(self.accounts) > 100:
+		if len(self.accounts) > 100 and not self.meta.queue_in_background:
 			queue_submission(self, "_cancel")
 		else:
 			return self._cancel()
@@ -498,6 +499,9 @@ class JournalEntry(AccountsController):
 
 	def validate_party(self):
 		for d in self.get("accounts"):
+			if d.party_type and not frappe.db.exists("Party Type", d.party_type):
+				frappe.throw(_("Row {0}: {1} is not a valid Party Type").format(d.idx, d.party_type))
+
 			account_type = frappe.get_cached_value("Account", d.account, "account_type")
 
 			if account_type in ["Receivable", "Payable"]:

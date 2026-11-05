@@ -107,6 +107,16 @@ class TestJobCard(FrappeTestCase):
 			)
 			self.assertEqual(completed_qty, job_card.for_quantity)
 
+	def test_removing_all_time_logs_clears_actual_dates(self):
+		job_card = frappe.get_last_doc("Job Card", {"work_order": self.work_order.name})
+		job_card.append("time_logs", {"from_time": "2024-03-01 08:00:00", "to_time": "2024-03-01 09:00:00"})
+		job_card.save()
+		self.assertTrue(job_card.actual_start_date and job_card.actual_end_date)
+
+		job_card.set("time_logs", [])
+		job_card.save()
+		self.assertEqual((job_card.actual_start_date, job_card.actual_end_date), (None, None))
+
 	def test_job_card_overlap(self):
 		wo2 = make_wo_order_test_record(item="_Test FG Item 2", qty=2)
 
@@ -1157,6 +1167,13 @@ class TestJobCard(FrappeTestCase):
 		s4.submit()
 
 		assert_operating_costs(s4, 3, [s, s3])
+
+	def test_completed_qty_sums_without_float_noise(self):
+		jc = frappe.new_doc("Job Card")
+		jc.update({"docstatus": 1, "for_quantity": 0.8, "total_completed_qty": 0.7, "process_loss_qty": 0.1})
+		jc.append("items", {"item_code": "_Test Item"})
+		jc.set_status()
+		self.assertEqual(jc.status, "Completed")
 
 	def test_set_process_loss(self):
 		nothing_done = frappe.new_doc("Job Card")

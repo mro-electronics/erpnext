@@ -3,18 +3,40 @@
 
 
 import unittest
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import change_settings
 from frappe.utils import add_days, flt, nowdate
 
-from erpnext.accounts.doctype.account.test_account import get_inventory_account
+from erpnext.accounts.doctype.account.test_account import create_account, get_inventory_account
 from erpnext.accounts.doctype.journal_entry.journal_entry import StockAccountInvalidTransaction
 from erpnext.exceptions import InvalidAccountCurrency
 from erpnext.selling.doctype.customer.test_customer import make_customer, set_credit_limit
 
 
 class TestJournalEntry(unittest.TestCase):
+	def test_unregistered_party_type_on_untyped_account_is_rejected(self):
+		account = create_account(
+			account_name="_Test Party Type Untyped",
+			parent_account=frappe.get_value("Account", "Debtors - _TC", "parent_account"),
+			company="_Test Company",
+		)
+		journal = make_journal_entry(account, "_Test Cash - _TC", 10, save=False)
+		journal.accounts[0].update({"party_type": "User", "party": "Administrator"})
+		self.assertRaises(frappe.ValidationError, journal.insert)
+
+	def test_registered_party_type_on_untyped_account_is_accepted(self):
+		account = create_account(
+			account_name="_Test Party Type Untyped",
+			parent_account=frappe.get_value("Account", "Debtors - _TC", "parent_account"),
+			company="_Test Company",
+		)
+		journal = make_journal_entry(account, "_Test Cash - _TC", 10, save=False)
+		journal.accounts[0].update({"party_type": "Customer", "party": "_Test Customer"})
+		journal.insert().submit()
+		self.assertTrue(frappe.db.exists("GL Entry", {"voucher_no": journal.name, "party_type": "Customer"}))
+
 	@change_settings("Accounts Settings", {"unlink_payment_on_cancellation_of_invoice": 1})
 	def test_journal_entry_with_against_jv(self):
 		jv_invoice = frappe.copy_doc(test_records[2])
@@ -477,6 +499,18 @@ class TestJournalEntry(unittest.TestCase):
 		self.assertEqual(
 			jv.pay_to_recd_from, frappe.db.get_value("Journal Entry", jv.name, "pay_to_recd_from")
 		)
+
+	def test_cancel_large_entry_queued_in_background(self):
+		jv = make_journal_entry("_Test Cash - _TC", "_Test Bank - _TC", 100, save=False)
+		for row in jv.accounts * 50:
+			jv.append("accounts", row.as_dict(no_default_fields=True))
+		jv.insert()
+
+		with patch.object(jv.meta, "queue_in_background", 1):
+			jv.submit()
+			jv.cancel()
+
+		self.assertEqual(frappe.db.get_value("Journal Entry", jv.name, "docstatus"), 2)
 
 	def test_jv_account_and_party_balance_with_cost_centre(self):
 		from erpnext.accounts.doctype.cost_center.test_cost_center import create_cost_center
